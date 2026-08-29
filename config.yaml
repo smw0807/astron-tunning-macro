@@ -17,7 +17,7 @@ ocr:
   - 320
 timing:
   after_tap: 0.6
-  after_modify: 1.8
+  after_modify: 2.2
   after_confirm: 1.2
   loop_idle: 0.4
 safety:
@@ -104,21 +104,22 @@ sell_sequence:
   - 238
 - wait: 0.6
 attempt_sequence:
-- tap:            # '개조' 탭
+- tap:
   - 202
   - 128
 - wait: 0.8
-- tap_slot: true  # 슬롯 아이템 클릭 → 개조 다이얼로그
+- tap_slot: true
 - wait: 0.5
-- wait_text:      # 개조 다이얼로그 활성화 확인 ('대박개조' 는 이 다이얼로그에만)
+- wait_text:
     text: 대박개조
     timeout: 3.0
+    required: true
     region:
     - 300
     - 330
     - 660
     - 450
-- tap:            # 4개 버튼 중 [개조]
+- tap:
   - 377
   - 357
 - wait: 1.0
@@ -131,18 +132,16 @@ attempt_sequence:
     - 320
 result:
   region:
-  - 300
-  - 230
-  - 660
-  - 320
+  - 144
+  - 2
+  - 406
+  - 102
   success_keywords:
-  - 개조에 성공
-  - 성공하였
-  - 성공했습니다
+  - 축하해요.
+  - 축하
   fail_keywords:
-  - 개조에 실패
-  - 실패하였
-  - 실패했습니다
+  - 미안해요.
+  - 미안
   locked_keywords:
   - 개조할 수 없
   - 더 이상 개조

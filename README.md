@@ -77,6 +77,7 @@ curl -sL -o models/korean_dict.txt  "https://raw.githubusercontent.com/PaddlePad
 | `{wait: 초}` | 대기 |
 | `{key: 코드}` | 키 이벤트 (4 = 뒤로가기) |
 | `{tap_if_text: {text: "확인", region: [x1,y1,x2,y2]}}` | 영역에 텍스트 있으면 그 위치 탭 |
+| `{wait_text: {text: "취소", region: […], timeout: 3, required: true}}` | 영역에 텍스트 뜰 때까지 대기. `required` 면 안 뜰 때 시퀀스 중단(개조 미실행으로 보고 재시도) |
 
 ## 개조 규칙 (`config.yaml` › `modify`)
 

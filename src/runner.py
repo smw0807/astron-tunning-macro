@@ -35,6 +35,10 @@ def save_config(cfg: dict, path: str | Path = "config.yaml") -> Path:
     return p
 
 
+class SequenceError(RuntimeError):
+    """required 스텝(wait_text 등)이 조건을 만족하지 못함."""
+
+
 def run_steps(adb: Adb, ocr: Ocr, steps: list[dict], timing: dict,
               should_stop=None, ctx: dict | None = None, log=None) -> None:
     """시퀀스 스텝 실행.
@@ -85,6 +89,8 @@ def run_steps(adb: Adb, ocr: Ocr, steps: list[dict], timing: dict,
                     break
                 adb.wait(0.4)
             if not found:
+                if d.get("required"):
+                    raise SequenceError(f"wait_text: '{d['text']}' {timeout}s 안에 안 나타남")
                 say(f"  (wait_text: '{d['text']}' {timeout}s 안에 안 나타남 — 계속 진행)")
         elif "key" in step:
             adb.key(step["key"])

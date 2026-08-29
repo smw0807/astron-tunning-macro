@@ -107,10 +107,13 @@ class StepDialog(tk.Toplevel):
             d = s.get("wait_text", {})
             self._field(self._body, "텍스트", "text", d.get("text", "취소"), 0)
             self._field(self._body, "타임아웃(초)", "timeout", d.get("timeout", 3.0), 1)
+            self._req = tk.BooleanVar(value=bool(d.get("required")))
+            ttk.Checkbutton(self._body, text="required (없으면 시퀀스 중단/재시도)",
+                            variable=self._req).grid(row=2, column=0, columnspan=2, sticky="w")
             reg = d.get("region", list(pr))
             for i, name in enumerate(["wx1", "wy1", "wx2", "wy2"]):
                 self._field(self._body, ["x1", "y1", "x2", "y2"][i], name,
-                            reg[i] if i < len(reg) else 0, i + 2)
+                            reg[i] if i < len(reg) else 0, i + 3)
         elif t == "key":
             self._field(self._body, "키코드", "code", s.get("key", 4), 0)
             ttk.Label(self._body, text="(4=뒤로가기)").grid(row=0, column=2, sticky="w")
@@ -135,11 +138,14 @@ class StepDialog(tk.Toplevel):
             elif t == "wait":
                 self.result = {"wait": float(g("sec"))}
             elif t == "wait_text":
-                self.result = {"wait_text": {
+                wt = {
                     "text": g("text"),
                     "timeout": float(g("timeout")),
                     "region": [int(float(g(k))) for k in ("wx1", "wy1", "wx2", "wy2")],
-                }}
+                }
+                if getattr(self, "_req", None) and self._req.get():
+                    wt["required"] = True
+                self.result = {"wait_text": wt}
             elif t == "key":
                 self.result = {"key": int(g("code"))}
             elif t == "tap_if_text":
@@ -163,7 +169,8 @@ def step_label(step: dict) -> str:
         return f"swipe ({v[0]},{v[1]}) → ({v[2]},{v[3]})  {v[4] if len(v) > 4 else 300}ms"
     if "wait_text" in step:
         d = step["wait_text"]
-        return f"wait_text  '{d.get('text')}'  {d.get('timeout', 3)}s  {d.get('region')}"
+        req = " [required]" if d.get("required") else ""
+        return f"wait_text  '{d.get('text')}'  {d.get('timeout', 3)}s{req}  {d.get('region')}"
     if "wait" in step:
         return f"wait  {step['wait']}s"
     if "key" in step:

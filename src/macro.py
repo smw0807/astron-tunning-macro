@@ -18,7 +18,7 @@ from typing import Callable
 
 from .adb import Adb
 from .ocr import Ocr
-from .runner import ROOT, load_config, run_steps
+from .runner import ROOT, SequenceError, load_config, run_steps
 
 # 실행 결과 코드
 OK = 0            # 목표 슬롯 수 모두 완료
@@ -212,6 +212,7 @@ class Macro:
         region = rcfg.get("region")
         consec = 0
         succ = 0
+        dialog_fails = 0
         cur_level: int | None = self._read_level(self.adb.screencap())
         base = cur_level if cur_level is not None else self._start_level
 
@@ -239,8 +240,20 @@ class Macro:
             if not self._gold_ok():
                 return _ABORT, LOW_GOLD
 
-            run_steps(self.adb, self.ocr, cfg["attempt_sequence"],
-                      timing, self._stop, {"slot_xy": slot_xy}, self.log)
+            try:
+                run_steps(self.adb, self.ocr, cfg["attempt_sequence"],
+                          timing, self._stop, {"slot_xy": slot_xy}, self.log)
+            except SequenceError as e:
+                # 개조 다이얼로그가 안 떴다 = 이번 개조는 실행 안 됨. 결과 읽지 말고 재시도.
+                self._attempt -= 1
+                dialog_fails += 1
+                if dialog_fails >= 5:
+                    self.log(f"⚠ 개조 다이얼로그가 5회 연속 안 뜸. 중단. ({e})")
+                    return _ABORT, UNKNOWN
+                self.log(f"⚠ {e} → 개조 미실행, 재시도 ({dialog_fails}/5)")
+                self.adb.wait(1.0)
+                continue
+            dialog_fails = 0
             self.adb.wait(timing.get("after_modify", 1.8))
 
             import cv2
