@@ -128,13 +128,14 @@ class Macro:
         self._fail_seq = self._rcfg.get("fail_sequence", [])
         self._succ_seq = self._rcfg.get("success_sequence", [])
         self._locked_kw = self._rcfg.get("locked_keywords", [])
+        # 스크린샷 디스크 저장: "all"(매 시도) / "events"(문제 상황만) / "none"
+        self._save_shots = str(self._safety.get("save_shots", "events")).lower()
 
         slots = cfg.get("slots", {})
         target_count = int(slots.get("target_count", 1))
         positions = slots.get("positions", []) or []
 
         self._shots = ROOT / "captures" / f"run_{datetime.now():%Y%m%d_%H%M%S}"
-        self._shots.mkdir(parents=True, exist_ok=True)
         self._attempt = 0
 
         for slot_no in range(1, target_count + 1):
@@ -270,10 +271,10 @@ class Macro:
             dialog_fails = 0
             self.adb.wait(timing.get("after_modify", 1.8))
 
-            import cv2
             img = self.adb.screencap()
             path = self._shots / f"{self._attempt:04d}.png"
-            cv2.imwrite(str(path), img)
+            if self._save_shots == "all":
+                self._write_shot(img, path)
             if self._on_shot:
                 self._on_shot(img, f"슬롯{slot_no} 시도{self._attempt}")
 
@@ -303,6 +304,8 @@ class Macro:
 
             if locked or (fail and consec >= self._fail_limit):
                 why = "개조 불가 감지" if locked else f"연속 {self._fail_limit}회 실패"
+                if self._save_shots != "none":
+                    self._write_shot(img, path)
                 self.log(f"🔧 {why} → 슬롯 아이템 판매 대상")
                 if locked:
                     run_steps(self.adb, self.ocr, self._fail_seq, timing, self._stop, log=self.log)
@@ -314,10 +317,18 @@ class Macro:
 
             self.log("⚠ 결과 텍스트 인식 실패.")
             self.log(self.ocr.text_dump(img, region) or "  (인식된 텍스트 없음)")
+            if self._save_shots != "none":
+                self._write_shot(img, path)
             if self._safety.get("stop_on_unknown_screen", True):
                 self.log(f"중단. 스크린샷: {path}")
                 return _ABORT, UNKNOWN
             run_steps(self.adb, self.ocr, self._fail_seq, timing, self._stop, log=self.log)
+
+    def _write_shot(self, img, path) -> None:
+        import cv2
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(path), img)
 
     def _alert(self) -> None:
         try:

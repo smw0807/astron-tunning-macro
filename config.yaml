@@ -29,6 +29,7 @@ safety:
   - 645
   - 500
   stop_on_unknown_screen: true
+  save_shots: events   # 스크린샷 디스크 저장: all(매 시도) / events(문제 상황만) / none
 slots:
   target_count: 8
   positions:
@@ -50,7 +51,7 @@ slots:
     - 520
 modify:
   fail_limit: 3
-  target_level: 8
+  target_level: 7
   start_level: 1
   level_region:
   - 0

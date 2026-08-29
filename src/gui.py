@@ -492,6 +492,7 @@ class App(tk.Tk):
         self.v_mingold = tk.StringVar(value=str(s.get("min_gold", 0)))
         self.v_goldregion = tk.StringVar(value=str(s.get("gold_region", [515, 478, 645, 500])))
         self.v_stopunknown = tk.BooleanVar(value=bool(s.get("stop_on_unknown_screen", True)))
+        self.v_saveshots = tk.StringVar(value=str(s.get("save_shots", "events")))
 
         grid = ttk.Frame(f)
         grid.pack(anchor="w")
@@ -505,6 +506,13 @@ class App(tk.Tk):
             ttk.Entry(grid, textvariable=var, width=24).grid(row=i, column=1, sticky="w")
         ttk.Checkbutton(f, text="성공/실패 문구를 못 읽으면 중단 (오작동 방지, 권장)",
                         variable=self.v_stopunknown).pack(anchor="w", pady=6)
+        ssf = ttk.Frame(f)
+        ssf.pack(anchor="w")
+        ttk.Label(ssf, text="스크린샷 저장").pack(side="left", padx=(0, 8))
+        ttk.Combobox(ssf, textvariable=self.v_saveshots, state="readonly", width=10,
+                     values=["all", "events", "none"]).pack(side="left")
+        ttk.Label(ssf, text="  all=매 시도  events=문제 상황만  none=저장 안 함",
+                  foreground="#777").pack(side="left")
 
         ttk.Separator(f).pack(fill="x", pady=8)
         ttk.Label(f, text="대기 시간(초)", font=("", 10, "bold")).pack(anchor="w")
@@ -734,6 +742,7 @@ class App(tk.Tk):
         s["min_gold"] = int(self.v_mingold.get())
         s["gold_region"] = _parse_list(self.v_goldregion.get())
         s["stop_on_unknown_screen"] = bool(self.v_stopunknown.get())
+        s["save_shots"] = self.v_saveshots.get()
 
         t = self.cfg.setdefault("timing", {})
         for k, v in self.timing_vars.items():
