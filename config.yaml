@@ -1,95 +1,156 @@
 # 아스트론 아이템 개조 매크로 설정
-# 좌표는 모두 캡처 해상도(screencap, 960x540) 기준 픽셀값.
-# GUI(python -m src.gui)로 편집 권장.
+# 좌표는 모두 캡처 해상도(screencap) 기준 픽셀값. GUI(python -m src.gui)로 편집 권장.
+# 이 파일은 GUI 저장 시 재생성되므로 주석은 유지되지 않습니다.
 
 adb:
-  path: "C:/Program Files/BlueStacks_nxt/HD-Adb.exe"
-  # serial 지정 시 그대로 사용, 비우면 instance_name 으로 bluestacks.conf 에서 포트 탐색
-  serial: "127.0.0.1:64384"
-  instance_name: "개조"
-  bluestacks_conf: "C:/ProgramData/BlueStacks_nxt/bluestacks.conf"
-  package: "com.ctugames.astron"
-
+  path: C:/Program Files/BlueStacks_nxt/HD-Adb.exe
+  serial: 127.0.0.1:64384
+  instance_name: 개조
+  bluestacks_conf: C:/ProgramData/BlueStacks_nxt/bluestacks.conf
+  package: com.ctugames.astron
 ocr:
-  rec_model_path: "models/korean_rec.onnx"
-  rec_keys_path: "models/korean_dict.txt"
-  rec_img_shape: [3, 32, 320]
-
+  rec_model_path: models/korean_rec.onnx
+  rec_keys_path: models/korean_dict.txt
+  rec_img_shape:
+  - 3
+  - 32
+  - 320
 timing:
   after_tap: 0.6
-  after_modify: 1.8      # 개조 버튼 누른 뒤 결과 뜰 때까지
+  after_modify: 1.8
   after_confirm: 1.2
   loop_idle: 0.4
-
 safety:
-  max_attempts: 500         # 총 개조 시도 이 횟수 넘으면 중단
-  min_gold: 100000          # 골드가 이보다 적으면 중단 (0 = 검사 안 함)
-  gold_region: [515, 478, 645, 500]
-  stop_on_unknown_screen: true   # 성공/실패 문구를 못 읽으면 중단
-
-# 슬롯 순회: 슬롯마다 [구매 → 개조로 목표레벨까지 → 다음 슬롯], 막히면 판매 후 재구매.
+  max_attempts: 500
+  min_gold: 100000
+  gold_region:
+  - 515
+  - 478
+  - 645
+  - 500
+  stop_on_unknown_screen: true
 slots:
-  target_count: 8          # 채울 슬롯 수 (1~8)
-  # 각 슬롯 아이템 클릭 좌표 (개조/판매 시 아이템 선택). GUI로 지정.
+  target_count: 8
   positions:
-    - [0, 0]   # 슬롯 1
-    - [0, 0]   # 슬롯 2
-    - [0, 0]   # 슬롯 3
-    - [0, 0]   # 슬롯 4
-    - [0, 0]   # 슬롯 5
-    - [0, 0]   # 슬롯 6
-    - [0, 0]   # 슬롯 7
-    - [0, 0]   # 슬롯 8
-
-# 개조 규칙: 개조 성공 1회 = 아이템 레벨 +1. 연속 3회 실패 = 개조 불가 → 판매.
+  - - 817
+    - 384
+  - - 906
+    - 381
+  - - 817
+    - 424
+  - - 898
+    - 425
+  - - 814
+    - 476
+  - - 902
+    - 468
+  - - 810
+    - 518
+  - - 909
+    - 520
 modify:
   fail_limit: 3
-  target_level: 8          # 슬롯 아이템을 이 레벨까지 올리면 완료 (1~8)
-  start_level: 1           # 새 아이템 시작 레벨 (레벨 OCR 실패 시 추정 기준)
-  level_region: [0, 0, 0, 0]   # 개조 화면의 아이템 레벨(Lv.N) 표시 영역. GUI로 지정.
-  level_pattern: '(?:lv|레벨)\s*[.:]?\s*([1-8])'
-
-# step 종류:
-#   {tap: [x,y]} / {tap_slot: true}(현재 슬롯 좌표 탭) / {swipe: [x1,y1,x2,y2,ms]}
-#   {wait: sec} / {key: code} / {tap_if_text: {text: "확인", region: [x1,y1,x2,y2]}}
-
-# 아이템 1개 구매 (구입 탭 → 카테고리 → 목록 아이템 → 구입 → 확인). 매번 같은 아이템.
+  target_level: 8
+  start_level: 1
+  level_region:
+  - 0
+  - 0
+  - 0
+  - 0
+  level_pattern: (?:lv|레벨)\s*[.:]?\s*([1-8])
 buy_sequence:
-  - {tap: [52, 128]}       # '구입' 탭
-  - {wait: 0.5}
-  - {tap: [0, 0]}          # TODO(GUI): 카테고리
-  - {tap: [0, 0]}          # TODO(GUI): 목록에서 아이템
-  - {tap: [0, 0]}          # TODO(GUI): '구입' 버튼
-  - {tap_if_text: {text: "예", region: [380, 260, 580, 320]}}
-buy_fail_keywords: ["골드가 부족", "골드가부족", "가방이 가득", "인벤토리가 가득"]
-
-# 막힌 아이템 판매 (판매 탭 → 슬롯 아이템 클릭 → 판매 → 확인).
+- tap:            # 1. 왼쪽 상단 '구입' 버튼
+  - 52
+  - 128
+- wait: 0.5
+- tap:            # 2. 구매할 아이템 (TODO: GUI 슬롯/구매 탭에서 좌표 지정)
+  - 0
+  - 0
+- wait: 0.4
+- wait_text:      # 3. 구입/취소 다이얼로그 활성화 확인
+    text: 취소
+    timeout: 3.0
+    region:       # TODO: GUI 로 다이얼로그 영역 지정
+    - 330
+    - 210
+    - 630
+    - 360
+- tap:            # 4. 다이얼로그의 '구입' 버튼 (TODO: GUI 로 좌표 지정)
+  - 0
+  - 0
+- wait: 0.6
+buy_fail_keywords:
+- 골드가 부족
+- 골드가부족
+- 가방이 가득
+- 인벤토리가 가득
 sell_sequence:
-  - {tap: [130, 128]}      # '판매' 탭
-  - {wait: 0.5}
-  - {tap_slot: true}       # 판매할 슬롯 아이템
-  - {tap: [0, 0]}          # TODO(GUI): '판매' 버튼
-  - {tap_if_text: {text: "예", region: [380, 260, 580, 320]}}
-
-# 개조 1회 시도. 매번 처음부터 실행되므로 아이템 재선택 포함.
+- tap:
+  - 130
+  - 128
+- wait: 0.5
+- tap_slot: true
+- tap:
+  - 0
+  - 0
+- tap_if_text:
+    text: 예
+    region:
+    - 380
+    - 260
+    - 580
+    - 320
 attempt_sequence:
-  - {tap: [202, 128]}      # '개조' 탭
-  - {wait: 0.8}
-  - {tap_slot: true}       # 현재 슬롯 아이템 클릭
-  - {wait: 0.5}
-  - {tap: [0, 0]}          # TODO(GUI): '개조' 실행 버튼
-  - {wait: 1.0}
-  - {tap_if_text: {text: "예", region: [380, 260, 580, 320]}}   # 확인 팝업
-
-# 결과 판정: after_modify 대기 후 region 을 OCR, 키워드 매칭
+- tap:
+  - 202
+  - 128
+- wait: 0.8
+- tap_slot: true
+- wait: 0.5
+- tap:
+  - 0
+  - 0
+- wait: 1.0
+- tap_if_text:
+    text: 예
+    region:
+    - 380
+    - 260
+    - 580
+    - 320
 result:
-  region: [300, 230, 660, 320]
-  success_keywords: ["개조에 성공", "성공하였", "성공했습니다"]
-  fail_keywords: ["개조에 실패", "실패하였", "실패했습니다"]
-  locked_keywords: ["개조할 수 없", "더 이상 개조", "개조가 불가"]
+  region:
+  - 300
+  - 230
+  - 660
+  - 320
+  success_keywords:
+  - 개조에 성공
+  - 성공하였
+  - 성공했습니다
+  fail_keywords:
+  - 개조에 실패
+  - 실패하였
+  - 실패했습니다
+  locked_keywords:
+  - 개조할 수 없
+  - 더 이상 개조
+  - 개조가 불가
   success_sequence:
-    - {tap_if_text: {text: "확인", region: [380, 300, 580, 360]}}
-    - {wait: 0.6}
+  - tap_if_text:
+      text: 확인
+      region:
+      - 380
+      - 300
+      - 580
+      - 360
+  - wait: 0.6
   fail_sequence:
-    - {tap_if_text: {text: "확인", region: [380, 300, 580, 360]}}
-    - {wait: 0.6}
+  - tap_if_text:
+      text: 확인
+      region:
+      - 380
+      - 300
+      - 580
+      - 360
+  - wait: 0.6

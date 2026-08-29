@@ -29,7 +29,7 @@ DISP_W = 720  # 캔버스 표시 폭
 # ─────────────────────────────────────────────────────────────────────────────
 # 스텝 편집 다이얼로그
 # ─────────────────────────────────────────────────────────────────────────────
-STEP_TYPES = ["tap", "tap_slot", "swipe", "wait", "key", "tap_if_text"]
+STEP_TYPES = ["tap", "tap_slot", "swipe", "wait", "wait_text", "key", "tap_if_text"]
 
 
 class StepDialog(tk.Toplevel):
@@ -103,6 +103,14 @@ class StepDialog(tk.Toplevel):
                 self._field(self._body, name, name, v[i] if i < len(v) else (400 if name == "ms" else 0), i)
         elif t == "wait":
             self._field(self._body, "초", "sec", s.get("wait", 1.0), 0)
+        elif t == "wait_text":
+            d = s.get("wait_text", {})
+            self._field(self._body, "텍스트", "text", d.get("text", "취소"), 0)
+            self._field(self._body, "타임아웃(초)", "timeout", d.get("timeout", 3.0), 1)
+            reg = d.get("region", list(pr))
+            for i, name in enumerate(["wx1", "wy1", "wx2", "wy2"]):
+                self._field(self._body, ["x1", "y1", "x2", "y2"][i], name,
+                            reg[i] if i < len(reg) else 0, i + 2)
         elif t == "key":
             self._field(self._body, "키코드", "code", s.get("key", 4), 0)
             ttk.Label(self._body, text="(4=뒤로가기)").grid(row=0, column=2, sticky="w")
@@ -126,6 +134,12 @@ class StepDialog(tk.Toplevel):
                 self.result = {"swipe": [int(float(g(k))) for k in ("x1", "y1", "x2", "y2", "ms")]}
             elif t == "wait":
                 self.result = {"wait": float(g("sec"))}
+            elif t == "wait_text":
+                self.result = {"wait_text": {
+                    "text": g("text"),
+                    "timeout": float(g("timeout")),
+                    "region": [int(float(g(k))) for k in ("wx1", "wy1", "wx2", "wy2")],
+                }}
             elif t == "key":
                 self.result = {"key": int(g("code"))}
             elif t == "tap_if_text":
@@ -147,6 +161,9 @@ def step_label(step: dict) -> str:
     if "swipe" in step:
         v = step["swipe"]
         return f"swipe ({v[0]},{v[1]}) → ({v[2]},{v[3]})  {v[4] if len(v) > 4 else 300}ms"
+    if "wait_text" in step:
+        d = step["wait_text"]
+        return f"wait_text  '{d.get('text')}'  {d.get('timeout', 3)}s  {d.get('region')}"
     if "wait" in step:
         return f"wait  {step['wait']}s"
     if "key" in step:
@@ -350,7 +367,7 @@ class App(tk.Tk):
 
         cols = ttk.Frame(f)
         cols.pack(fill="both", expand=True, pady=4)
-        bl = ttk.LabelFrame(cols, text="구매 시퀀스 (구입탭 → 카테고리 → 아이템 → 구입 → 확인)", padding=4)
+        bl = ttk.LabelFrame(cols, text="구매: 구입탭 → 아이템 → wait_text(취소) → 구입버튼", padding=4)
         bl.pack(side="left", fill="both", expand=True, padx=(0, 4))
         self.buy_editor = SequenceEditor(
             bl, self, lambda: self.cfg.setdefault("buy_sequence", []),

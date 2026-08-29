@@ -1,6 +1,7 @@
 """공용 로더 + attempt_sequence 실행기."""
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import yaml
@@ -69,6 +70,22 @@ def run_steps(adb: Adb, ocr: Ocr, steps: list[dict], timing: dict,
             if ln:
                 adb.tap(ln.cx, ln.cy)
                 adb.wait(timing.get("after_confirm", 1.2))
+            else:
+                say(f"  (tap_if_text: '{t['text']}' 없음 — 건너뜀)")
+        elif "wait_text" in step:
+            d = step["wait_text"]
+            timeout = float(d.get("timeout", 3.0))
+            deadline = time.time() + timeout
+            found = False
+            while time.time() < deadline:
+                if stop():
+                    return
+                if ocr.find(adb.screencap(), d["text"], d.get("region")):
+                    found = True
+                    break
+                adb.wait(0.4)
+            if not found:
+                say(f"  (wait_text: '{d['text']}' {timeout}s 안에 안 나타남 — 계속 진행)")
         elif "key" in step:
             adb.key(step["key"])
             adb.wait(timing.get("after_tap", 0.6))
