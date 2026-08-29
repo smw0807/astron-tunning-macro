@@ -21,11 +21,12 @@ from .ocr import Ocr
 from .runner import ROOT, load_config, run_steps
 
 # 실행 결과 코드
-OK = 0            # 개조 성공
+OK = 0            # 목표 성공 횟수 달성
 MAX_REACHED = 1   # 최대 시도 도달
 LOW_GOLD = 2      # 골드 부족
 UNKNOWN = 3       # 결과 화면 인식 실패
 STOPPED = 4       # 사용자 중단
+LOCKED = 5        # 개조 불가 상태인데 복구 시퀀스가 없음
 
 
 def parse_gold(text: str) -> int | None:
@@ -95,18 +96,36 @@ class Macro:
         if self.adb.package and not self.adb.is_game_foreground():
             self.log(f"경고: 게임({self.adb.package})이 포그라운드가 아닙니다.")
 
+        mod = cfg.get("modify", {})
+        fail_limit = int(mod.get("fail_limit", 3))
+        target = int(mod.get("target_successes", 0))
+        recovery = mod.get("recovery_sequence", [])
+        # 하위호환: 예전 dismiss_sequence 를 fail_sequence 로 사용
+        fail_seq = rcfg.get("fail_sequence", rcfg.get("dismiss_sequence", []))
+        succ_seq = rcfg.get("success_sequence", [])
+        locked_kw = rcfg.get("locked_keywords", [])
+
         shots = ROOT / "captures" / f"run_{datetime.now():%Y%m%d_%H%M%S}"
         shots.mkdir(parents=True, exist_ok=True)
         min_gold = safety.get("min_gold", 0)
 
         attempt = 0
+        successes = 0
+        consec_fails = 0
+
+        def status() -> str:
+            s = f"성공 {successes}"
+            if target:
+                s += f"/{target}"
+            return f"{s}  연속실패 {consec_fails}/{fail_limit}"
+
         while attempt < total:
             if self._stop():
                 self.log("사용자 중단.")
                 return STOPPED
             attempt += 1
-            self._progress(attempt, total, "시도 중")
-            self.log(f"--- 시도 {attempt}/{total} ---")
+            self._progress(attempt, total, status())
+            self.log(f"--- 시도 {attempt}/{total}  ({status()}) ---")
 
             if min_gold:
                 img = self.adb.screencap()
@@ -125,30 +144,54 @@ class Macro:
             if self._on_shot:
                 self._on_shot(img, f"시도 {attempt}")
 
-            hit = self.ocr.find_any(img, rcfg["success_keywords"], rcfg.get("region"))
+            region = rcfg.get("region")
+            hit = self.ocr.find_any(img, rcfg["success_keywords"], region)
             if hit:
                 _, ln = hit
-                self.log(f"✅ 개조 성공! ('{ln.text}') — {attempt}회차. 중단합니다.")
-                self._progress(attempt, total, "성공")
-                self._alert()
-                return OK
+                successes += 1
+                consec_fails = 0
+                self.log(f"✅ 개조 성공! ('{ln.text}')  누적 성공 {successes}")
+                self._progress(attempt, total, status())
+                run_steps(self.adb, self.ocr, succ_seq, timing, self._stop)
+                if target and successes >= target:
+                    self.log(f"목표 성공 {target}회 달성. 중단.")
+                    self._alert()
+                    return OK
+                self.adb.wait(timing.get("loop_idle", 0.4))
+                continue
 
-            fail = self.ocr.find_any(img, rcfg["fail_keywords"], rcfg.get("region"))
-            if fail:
+            locked = self.ocr.find_any(img, locked_kw, region) if locked_kw else None
+            fail = self.ocr.find_any(img, rcfg["fail_keywords"], region)
+
+            if fail and not locked:
                 _, ln = fail
-                self.log(f"❌ 실패 ('{ln.text}'). 팝업 닫고 재시도.")
-                run_steps(self.adb, self.ocr, rcfg.get("dismiss_sequence", []), timing, self._stop)
+                consec_fails += 1
+                self.log(f"❌ 실패 ('{ln.text}')  연속 {consec_fails}/{fail_limit}")
+                run_steps(self.adb, self.ocr, fail_seq, timing, self._stop)
+
+            if locked or (fail and consec_fails >= fail_limit):
+                why = "개조 불가 상태 감지" if locked else f"연속 {fail_limit}회 실패"
+                if not recovery:
+                    self.log(f"⚠ {why}. 복구 시퀀스가 없어 중단합니다. (GUI › 개조 규칙 › 복구 시퀀스)")
+                    return LOCKED
+                self.log(f"🔧 {why} → 복구 시퀀스 실행")
+                run_steps(self.adb, self.ocr, recovery, timing, self._stop)
+                consec_fails = 0
+                self.adb.wait(timing.get("loop_idle", 0.4))
+                continue
+
+            if fail:
                 self.adb.wait(timing.get("loop_idle", 0.4))
                 continue
 
             self.log("⚠ 결과 텍스트를 인식하지 못했습니다.")
-            self.log(self.ocr.text_dump(img, rcfg.get("region")) or "  (인식된 텍스트 없음)")
+            self.log(self.ocr.text_dump(img, region) or "  (인식된 텍스트 없음)")
             if safety.get("stop_on_unknown_screen", True):
                 self.log(f"중단. 스크린샷: {path}")
                 return UNKNOWN
-            run_steps(self.adb, self.ocr, rcfg.get("dismiss_sequence", []), timing, self._stop)
+            run_steps(self.adb, self.ocr, fail_seq, timing, self._stop)
 
-        self.log(f"최대 시도 횟수({total}) 도달. 중단.")
+        self.log(f"최대 시도 횟수({total}) 도달. 누적 성공 {successes}. 중단.")
         return MAX_REACHED
 
     def _alert(self) -> None:

@@ -303,6 +303,7 @@ class App(tk.Tk):
         nb.pack(side="left", fill="both", expand=True, padx=(8, 0))
         self._tab_sequence(nb)
         self._tab_result(nb)
+        self._tab_modify(nb)
         self._tab_safety(nb)
         self._tab_run(nb)
         self._tab_ocr(nb)
@@ -336,23 +337,65 @@ class App(tk.Tk):
         self.t_success.pack(fill="x")
         self.t_success.insert("1.0", "\n".join(r.get("success_keywords", [])))
 
-        ttk.Label(f, text="실패 키워드 (보이면 팝업 닫고 재시도)").pack(anchor="w", pady=(8, 0))
-        self.t_fail = tk.Text(f, height=3, width=50)
+        ttk.Label(f, text="실패 키워드 (보이면 실패 카운트 +1, 팝업 닫고 재시도)").pack(anchor="w", pady=(8, 0))
+        self.t_fail = tk.Text(f, height=2, width=50)
         self.t_fail.pack(fill="x")
         self.t_fail.insert("1.0", "\n".join(r.get("fail_keywords", [])))
+
+        ttk.Label(f, text="개조 불가/막힘 키워드 (보이면 복구 시퀀스 실행)").pack(anchor="w", pady=(8, 0))
+        self.t_locked = tk.Text(f, height=2, width=50)
+        self.t_locked.pack(fill="x")
+        self.t_locked.insert("1.0", "\n".join(r.get("locked_keywords", [])))
 
         rf = ttk.Frame(f)
         rf.pack(fill="x", pady=8)
         ttk.Label(rf, text="결과 메시지 영역 [x1,y1,x2,y2]").pack(side="left")
         self.v_result_region = tk.StringVar(value=str(r.get("region", [300, 230, 660, 320])))
         ttk.Entry(rf, textvariable=self.v_result_region, width=24).pack(side="left", padx=4)
+        ttk.Button(rf, text="← 선택 영역", command=lambda: self._apply_to(self.v_result_region)).pack(side="left")
 
-        ttk.Label(f, text="실패 팝업 닫기 시퀀스").pack(anchor="w", pady=(8, 0))
-        self.dismiss_editor = SequenceEditor(
+        cols = ttk.Frame(f)
+        cols.pack(fill="both", expand=True, pady=4)
+        lc = ttk.LabelFrame(cols, text="성공 팝업 닫기 시퀀스", padding=4)
+        lc.pack(side="left", fill="both", expand=True, padx=(0, 4))
+        self.success_editor = SequenceEditor(
+            lc, self,
+            lambda: self.cfg["result"].setdefault("success_sequence", []),
+            lambda v: self.cfg["result"].__setitem__("success_sequence", v))
+        self.success_editor.pack(fill="both", expand=True)
+        rc = ttk.LabelFrame(cols, text="실패 팝업 닫기 시퀀스", padding=4)
+        rc.pack(side="left", fill="both", expand=True)
+        self.fail_editor = SequenceEditor(
+            rc, self,
+            lambda: self.cfg["result"].setdefault("fail_sequence", []),
+            lambda v: self.cfg["result"].__setitem__("fail_sequence", v))
+        self.fail_editor.pack(fill="both", expand=True)
+
+    # ---- 탭: 개조 규칙 ---------------------------------------------
+    def _tab_modify(self, nb):
+        f = ttk.Frame(nb, padding=8)
+        nb.add(f, text="개조 규칙")
+        m = self.cfg.setdefault("modify", {})
+
+        ttk.Label(f, text="레벨당 개조 3회, 연속 3회 실패 시 개조 불가 → 복구 필요",
+                  wraplength=440, foreground="#555").pack(anchor="w")
+        grid = ttk.Frame(f)
+        grid.pack(anchor="w", pady=6)
+        self.v_faillimit = tk.StringVar(value=str(m.get("fail_limit", 3)))
+        self.v_targetsucc = tk.StringVar(value=str(m.get("target_successes", 0)))
+        ttk.Label(grid, text="연속 실패 한계 (도달 시 복구)").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=3)
+        ttk.Entry(grid, textvariable=self.v_faillimit, width=8).grid(row=0, column=1, sticky="w")
+        ttk.Label(grid, text="목표 누적 성공 횟수 (0 = 무제한)").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=3)
+        ttk.Entry(grid, textvariable=self.v_targetsucc, width=8).grid(row=1, column=1, sticky="w")
+
+        ttk.Label(f, text="복구 시퀀스 — 연속 실패 한계 도달 / 개조 불가 감지 시 실행\n"
+                          "(예: 실패팝업 닫기 → 수리 탭 → 아이템 클릭 → 수리 → 확인 → 개조 탭 복귀)",
+                  wraplength=440).pack(anchor="w", pady=(10, 2))
+        self.recovery_editor = SequenceEditor(
             f, self,
-            lambda: self.cfg["result"].setdefault("dismiss_sequence", []),
-            lambda v: self.cfg["result"].__setitem__("dismiss_sequence", v))
-        self.dismiss_editor.pack(fill="both", expand=True, pady=4)
+            lambda: self.cfg["modify"].setdefault("recovery_sequence", []),
+            lambda v: self.cfg["modify"].__setitem__("recovery_sequence", v))
+        self.recovery_editor.pack(fill="both", expand=True, pady=4)
 
     # ---- 탭: 안전장치/타이밍 -----------------------------------------
     def _tab_safety(self, nb):
@@ -530,6 +573,12 @@ class App(tk.Tk):
         else:
             self.v_goldregion.set(str(reg))
 
+    def _apply_to(self, var: tk.StringVar):
+        if not self.picked_region:
+            messagebox.showinfo("안내", "먼저 화면에서 영역을 드래그하세요.", parent=self)
+            return
+        var.set(str(list(self.picked_region)))
+
     # ---- OCR 테스트 ---------------------------------------------
     def _ensure_ocr(self):
         if self.ocr is None:
@@ -565,9 +614,17 @@ class App(tk.Tk):
     def _collect(self):
         self._sync_adb_cfg()
         r = self.cfg.setdefault("result", {})
-        r["success_keywords"] = [x.strip() for x in self.t_success.get("1.0", "end").splitlines() if x.strip()]
-        r["fail_keywords"] = [x.strip() for x in self.t_fail.get("1.0", "end").splitlines() if x.strip()]
+        lines = lambda t: [x.strip() for x in t.get("1.0", "end").splitlines() if x.strip()]
+        r["success_keywords"] = lines(self.t_success)
+        r["fail_keywords"] = lines(self.t_fail)
+        r["locked_keywords"] = lines(self.t_locked)
         r["region"] = _parse_list(self.v_result_region.get())
+        r.pop("dismiss_sequence", None)  # 구 키 제거
+
+        m = self.cfg.setdefault("modify", {})
+        m["fail_limit"] = int(self.v_faillimit.get())
+        m["target_successes"] = int(self.v_targetsucc.get())
+        m.setdefault("recovery_sequence", [])
 
         s = self.cfg.setdefault("safety", {})
         s["max_attempts"] = int(self.v_max.get())
