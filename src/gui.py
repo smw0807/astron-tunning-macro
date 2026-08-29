@@ -377,16 +377,31 @@ class App(tk.Tk):
         nb.add(f, text="개조 규칙")
         m = self.cfg.setdefault("modify", {})
 
-        ttk.Label(f, text="레벨당 개조 3회, 연속 3회 실패 시 개조 불가 → 복구 필요",
+        ttk.Label(f, text="아이템 레벨 1~8. 개조 성공 1회 = 레벨 +1. 연속 3회 실패 시 개조 불가 → 복구 필요",
                   wraplength=440, foreground="#555").pack(anchor="w")
         grid = ttk.Frame(f)
         grid.pack(anchor="w", pady=6)
         self.v_faillimit = tk.StringVar(value=str(m.get("fail_limit", 3)))
+        self.v_targetlevel = tk.StringVar(value=str(m.get("target_level", 8)))
+        self.v_startlevel = tk.StringVar(value=str(m.get("start_level", 1)))
         self.v_targetsucc = tk.StringVar(value=str(m.get("target_successes", 0)))
-        ttk.Label(grid, text="연속 실패 한계 (도달 시 복구)").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=3)
-        ttk.Entry(grid, textvariable=self.v_faillimit, width=8).grid(row=0, column=1, sticky="w")
-        ttk.Label(grid, text="목표 누적 성공 횟수 (0 = 무제한)").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=3)
-        ttk.Entry(grid, textvariable=self.v_targetsucc, width=8).grid(row=1, column=1, sticky="w")
+        self.v_levelregion = tk.StringVar(value=str(m.get("level_region", [0, 0, 0, 0])))
+        self.v_levelpattern = tk.StringVar(value=str(m.get("level_pattern", r"(?:lv|레벨)\s*[.:]?\s*([1-8])")))
+        rows = [
+            ("목표 레벨 (여기 도달 시 중단, 0=미사용)", self.v_targetlevel, 6),
+            ("시작 레벨 (레벨 OCR 실패 시 추정 기준)", self.v_startlevel, 6),
+            ("목표 누적 성공 횟수 (0 = 미사용)", self.v_targetsucc, 6),
+            ("연속 실패 한계 (도달 시 복구)", self.v_faillimit, 6),
+            ("레벨 추출 정규식 (그룹1=숫자)", self.v_levelpattern, 28),
+        ]
+        for i, (lab, var, w) in enumerate(rows):
+            ttk.Label(grid, text=lab).grid(row=i, column=0, sticky="w", padx=(0, 8), pady=2)
+            ttk.Entry(grid, textvariable=var, width=w).grid(row=i, column=1, sticky="w")
+        ttk.Label(grid, text="아이템 레벨(Lv.N) 표시 영역").grid(row=len(rows), column=0, sticky="w", padx=(0, 8), pady=2)
+        lrf = ttk.Frame(grid)
+        lrf.grid(row=len(rows), column=1, sticky="w")
+        ttk.Entry(lrf, textvariable=self.v_levelregion, width=20).pack(side="left")
+        ttk.Button(lrf, text="← 선택 영역", command=lambda: self._apply_to(self.v_levelregion)).pack(side="left")
 
         ttk.Label(f, text="복구 시퀀스 — 연속 실패 한계 도달 / 개조 불가 감지 시 실행\n"
                           "(예: 실패팝업 닫기 → 수리 탭 → 아이템 클릭 → 수리 → 확인 → 개조 탭 복귀)",
@@ -623,7 +638,11 @@ class App(tk.Tk):
 
         m = self.cfg.setdefault("modify", {})
         m["fail_limit"] = int(self.v_faillimit.get())
+        m["target_level"] = int(self.v_targetlevel.get())
+        m["start_level"] = int(self.v_startlevel.get())
         m["target_successes"] = int(self.v_targetsucc.get())
+        m["level_region"] = _parse_list(self.v_levelregion.get())
+        m["level_pattern"] = self.v_levelpattern.get().strip()
         m.setdefault("recovery_sequence", [])
 
         s = self.cfg.setdefault("safety", {})

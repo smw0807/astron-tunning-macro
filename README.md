@@ -72,8 +72,18 @@ python -m src.macro                # config 의 max_attempts 까지
 
 성공 시 알림음 후 중단. 매 시도의 결과 스크린샷은 `captures/run_*/` 에 저장.
 
+## 개조 규칙 (`config.yaml` › `modify`)
+
+- 아이템 레벨 1~8, 개조 성공 1회 = 레벨 +1
+- `target_level` — 이 레벨에 도달하면 중단 (0 = 미사용)
+- `target_successes` — 누적 성공 N회면 중단 (0 = 미사용)
+- `start_level` / `level_region` / `level_pattern` — 매 성공 후 `level_region` 을 OCR 해
+  현재 레벨을 읽는다. 못 읽으면 `start_level + 성공횟수` 로 추정
+- `fail_limit` — 연속 실패가 이 횟수(기본 3)에 도달하면 `recovery_sequence` 실행 후 카운터 초기화
+- `recovery_sequence` — 개조 불가/막힘 상태 복구 동작 (수리·재구매 등)
+
 ## 안전장치 (`config.yaml` › `safety`)
 
-- `max_attempts` — 초과 시 중단
+- `max_attempts` — 총 시도 초과 시 중단
 - `min_gold` — 골드가 이보다 적으면 중단 (0 = 검사 안 함)
 - `stop_on_unknown_screen` — 성공/실패 문구를 못 읽으면 중단 (오작동 방지)

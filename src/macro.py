@@ -38,6 +38,21 @@ def parse_gold(text: str) -> int | None:
     return best
 
 
+DEFAULT_LEVEL_PATTERN = r"(?:lv|레벨|레 벨)\s*[.:]?\s*([1-8])"
+
+
+def parse_level(text: str, pattern: str = DEFAULT_LEVEL_PATTERN) -> int | None:
+    """OCR 텍스트에서 아이템 레벨(1~8)을 추출."""
+    m = re.search(pattern, text, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    # 패턴 실패 시: 영역 안에 홀로 있는 1~8 숫자
+    digits = re.findall(r"\b([1-8])\b", text)
+    if len(digits) == 1:
+        return int(digits[0])
+    return None
+
+
 class Macro:
     """개조 반복 루프. GUI/CLI 공용.
 
@@ -99,6 +114,14 @@ class Macro:
         mod = cfg.get("modify", {})
         fail_limit = int(mod.get("fail_limit", 3))
         target = int(mod.get("target_successes", 0))
+        target_level = int(mod.get("target_level", 0))
+        start_level = int(mod.get("start_level", 1))
+        level_region = mod.get("level_region")
+        if level_region and (len(level_region) != 4
+                             or level_region[0] >= level_region[2]
+                             or level_region[1] >= level_region[3]):
+            level_region = None       # [0,0,0,0] 등 미설정으로 취급
+        level_pattern = mod.get("level_pattern") or DEFAULT_LEVEL_PATTERN
         recovery = mod.get("recovery_sequence", [])
         # 하위호환: 예전 dismiss_sequence 를 fail_sequence 로 사용
         fail_seq = rcfg.get("fail_sequence", rcfg.get("dismiss_sequence", []))
@@ -112,12 +135,40 @@ class Macro:
         attempt = 0
         successes = 0
         consec_fails = 0
+        cur_level: int | None = None
+
+        def read_level(img) -> int | None:
+            if not level_region:
+                return None
+            lv = parse_level(self.ocr.text_dump(img, level_region), level_pattern)
+            return lv
+
+        def est_level() -> int | None:
+            if cur_level is not None:
+                return cur_level
+            return start_level + successes if start_level else None
 
         def status() -> str:
-            s = f"성공 {successes}"
+            parts = [f"성공 {successes}"]
             if target:
-                s += f"/{target}"
-            return f"{s}  연속실패 {consec_fails}/{fail_limit}"
+                parts[0] += f"/{target}"
+            lv = est_level()
+            if lv is not None:
+                parts.append(f"Lv.{lv}" + (f"→{target_level}" if target_level else ""))
+            parts.append(f"연속실패 {consec_fails}/{fail_limit}")
+            return "  ".join(parts)
+
+        def level_reached() -> bool:
+            lv = est_level()
+            return bool(target_level) and lv is not None and lv >= target_level
+
+        # 시작 시 이미 목표 레벨이면 바로 종료
+        if target_level:
+            img0 = self.adb.screencap()
+            cur_level = read_level(img0)
+            if level_reached():
+                self.log(f"이미 목표 레벨(Lv.{cur_level} ≥ {target_level}). 할 일 없음.")
+                return OK
 
         while attempt < total:
             if self._stop():
@@ -150,9 +201,19 @@ class Macro:
                 _, ln = hit
                 successes += 1
                 consec_fails = 0
-                self.log(f"✅ 개조 성공! ('{ln.text}')  누적 성공 {successes}")
+                lv = read_level(img)
+                if lv is not None:
+                    cur_level = lv
+                elif cur_level is not None:
+                    cur_level += 1          # OCR 실패 시 +1 추정
+                self.log(f"✅ 개조 성공! ('{ln.text}')  누적 성공 {successes}"
+                         + (f"  Lv.{cur_level}" if cur_level is not None else ""))
                 self._progress(attempt, total, status())
                 run_steps(self.adb, self.ocr, succ_seq, timing, self._stop)
+                if level_reached():
+                    self.log(f"목표 레벨 Lv.{target_level} 도달. 중단.")
+                    self._alert()
+                    return OK
                 if target and successes >= target:
                     self.log(f"목표 성공 {target}회 달성. 중단.")
                     self._alert()
