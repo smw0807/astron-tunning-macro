@@ -29,7 +29,7 @@ DISP_W = 720  # 캔버스 표시 폭
 # ─────────────────────────────────────────────────────────────────────────────
 # 스텝 편집 다이얼로그
 # ─────────────────────────────────────────────────────────────────────────────
-STEP_TYPES = ["tap", "swipe", "wait", "key", "tap_if_text"]
+STEP_TYPES = ["tap", "tap_slot", "swipe", "wait", "key", "tap_if_text"]
 
 
 class StepDialog(tk.Toplevel):
@@ -95,6 +95,8 @@ class StepDialog(tk.Toplevel):
             xy = s.get("tap", list(px))
             self._field(self._body, "x", "x", xy[0], 0)
             self._field(self._body, "y", "y", xy[1], 1)
+        elif t == "tap_slot":
+            ttk.Label(self._body, text="현재 슬롯 아이템 좌표를 탭 (인자 없음)").grid(row=0, column=0)
         elif t == "swipe":
             v = s.get("swipe", [pr[0], pr[1], pr[2], pr[3], 400])
             for i, name in enumerate(["x1", "y1", "x2", "y2", "ms"]):
@@ -118,6 +120,8 @@ class StepDialog(tk.Toplevel):
         try:
             if t == "tap":
                 self.result = {"tap": [int(float(g("x"))), int(float(g("y")))]}
+            elif t == "tap_slot":
+                self.result = {"tap_slot": True}
             elif t == "swipe":
                 self.result = {"swipe": [int(float(g(k))) for k in ("x1", "y1", "x2", "y2", "ms")]}
             elif t == "wait":
@@ -136,6 +140,8 @@ class StepDialog(tk.Toplevel):
 
 
 def step_label(step: dict) -> str:
+    if "tap_slot" in step:
+        return "tap_slot  (현재 슬롯 아이템)"
     if "tap" in step:
         return f"tap  ({step['tap'][0]}, {step['tap'][1]})"
     if "swipe" in step:
@@ -295,12 +301,14 @@ class App(tk.Tk):
         applyf.pack(fill="x")
         self.v_target = tk.StringVar(value="결과 판정 영역(region)")
         ttk.Combobox(applyf, textvariable=self.v_target, state="readonly",
-                     values=["결과 판정 영역(region)", "골드 인식 영역(gold_region)"]).pack(fill="x")
+                     values=["결과 판정 영역(region)", "골드 인식 영역(gold_region)",
+                             "레벨 인식 영역(level_region)"]).pack(fill="x")
         ttk.Button(applyf, text="선택 영역을 여기에 적용", command=self._apply_region).pack(fill="x", pady=3)
 
         # 오른쪽: 탭
         nb = ttk.Notebook(body)
         nb.pack(side="left", fill="both", expand=True, padx=(8, 0))
+        self._tab_slots(nb)
         self._tab_sequence(nb)
         self._tab_result(nb)
         self._tab_modify(nb)
@@ -314,11 +322,58 @@ class App(tk.Tk):
         ttk.Button(foot, text="다시 불러오기", command=self.reload).pack(side="left", padx=4)
         ttk.Label(foot, text=str(config_path())).pack(side="right")
 
+    # ---- 탭: 슬롯 / 구매 --------------------------------------------
+    def _tab_slots(self, nb):
+        f = ttk.Frame(nb, padding=8)
+        nb.add(f, text="슬롯 / 구매")
+        s = self.cfg.setdefault("slots", {})
+        pos = s.get("positions", []) or []
+
+        top = ttk.Frame(f)
+        top.pack(anchor="w")
+        ttk.Label(top, text="채울 슬롯 수").pack(side="left")
+        self.v_slotcount = tk.StringVar(value=str(s.get("target_count", 8)))
+        ttk.Spinbox(top, from_=1, to=8, width=4, textvariable=self.v_slotcount).pack(side="left", padx=4)
+        ttk.Label(top, text="  아래에서 각 슬롯 아이템 좌표를 지정 (화면 클릭 후 '←' 버튼)").pack(side="left")
+
+        grid = ttk.Frame(f)
+        grid.pack(anchor="w", pady=6)
+        self.v_slotpos = []
+        for i in range(8):
+            xy = pos[i] if i < len(pos) else [0, 0]
+            v = tk.StringVar(value=f"{xy[0]}, {xy[1]}")
+            self.v_slotpos.append(v)
+            ttk.Label(grid, text=f"슬롯 {i+1}").grid(row=i, column=0, sticky="w", padx=(0, 6), pady=1)
+            ttk.Entry(grid, textvariable=v, width=12).grid(row=i, column=1, pady=1)
+            ttk.Button(grid, text="← 선택 좌표", width=11,
+                       command=lambda vv=v: self._apply_xy(vv)).grid(row=i, column=2, padx=4)
+
+        cols = ttk.Frame(f)
+        cols.pack(fill="both", expand=True, pady=4)
+        bl = ttk.LabelFrame(cols, text="구매 시퀀스 (구입탭 → 카테고리 → 아이템 → 구입 → 확인)", padding=4)
+        bl.pack(side="left", fill="both", expand=True, padx=(0, 4))
+        self.buy_editor = SequenceEditor(
+            bl, self, lambda: self.cfg.setdefault("buy_sequence", []),
+            lambda v: self.cfg.__setitem__("buy_sequence", v))
+        self.buy_editor.pack(fill="both", expand=True)
+        sr = ttk.LabelFrame(cols, text="판매 시퀀스 (판매탭 → 슬롯 → 판매 → 확인)", padding=4)
+        sr.pack(side="left", fill="both", expand=True)
+        self.sell_editor = SequenceEditor(
+            sr, self, lambda: self.cfg.setdefault("sell_sequence", []),
+            lambda v: self.cfg.__setitem__("sell_sequence", v))
+        self.sell_editor.pack(fill="both", expand=True)
+
+        ttk.Label(f, text="구매 실패 키워드 (골드/가방 부족 등 — 보이면 중단)").pack(anchor="w", pady=(6, 0))
+        self.t_buyfail = tk.Text(f, height=2, width=50)
+        self.t_buyfail.pack(fill="x")
+        self.t_buyfail.insert("1.0", "\n".join(self.cfg.get("buy_fail_keywords", [])))
+
     # ---- 탭: 시퀀스 -----------------------------------------------------
     def _tab_sequence(self, nb):
         f = ttk.Frame(nb, padding=8)
         nb.add(f, text="개조 시퀀스")
-        ttk.Label(f, text="개조 1회 시도 동작 순서 (아이템 선택 → 개조 버튼 → 확인 팝업)",
+        ttk.Label(f, text="개조 1회 시도 순서. 'tap_slot' = 현재 슬롯 아이템 클릭.\n"
+                          "예: 개조탭 → tap_slot → 개조버튼 → 확인",
                   wraplength=420).pack(anchor="w")
         self.seq_editor = SequenceEditor(
             f, self,
@@ -377,21 +432,20 @@ class App(tk.Tk):
         nb.add(f, text="개조 규칙")
         m = self.cfg.setdefault("modify", {})
 
-        ttk.Label(f, text="아이템 레벨 1~8. 개조 성공 1회 = 레벨 +1. 연속 3회 실패 시 개조 불가 → 복구 필요",
+        ttk.Label(f, text="아이템 레벨 1~8. 개조 성공 1회 = 레벨 +1. 슬롯 아이템을 목표 레벨까지 올리면 "
+                          "다음 슬롯으로. 연속 실패 한계 도달 시 그 아이템은 판매 후 재구매.",
                   wraplength=440, foreground="#555").pack(anchor="w")
         grid = ttk.Frame(f)
         grid.pack(anchor="w", pady=6)
         self.v_faillimit = tk.StringVar(value=str(m.get("fail_limit", 3)))
         self.v_targetlevel = tk.StringVar(value=str(m.get("target_level", 8)))
         self.v_startlevel = tk.StringVar(value=str(m.get("start_level", 1)))
-        self.v_targetsucc = tk.StringVar(value=str(m.get("target_successes", 0)))
         self.v_levelregion = tk.StringVar(value=str(m.get("level_region", [0, 0, 0, 0])))
         self.v_levelpattern = tk.StringVar(value=str(m.get("level_pattern", r"(?:lv|레벨)\s*[.:]?\s*([1-8])")))
         rows = [
-            ("목표 레벨 (여기 도달 시 중단, 0=미사용)", self.v_targetlevel, 6),
-            ("시작 레벨 (레벨 OCR 실패 시 추정 기준)", self.v_startlevel, 6),
-            ("목표 누적 성공 횟수 (0 = 미사용)", self.v_targetsucc, 6),
-            ("연속 실패 한계 (도달 시 복구)", self.v_faillimit, 6),
+            ("목표 레벨 (슬롯당, 1~8)", self.v_targetlevel, 6),
+            ("시작 레벨 (새 아이템 기준)", self.v_startlevel, 6),
+            ("연속 실패 한계 (도달 시 판매)", self.v_faillimit, 6),
             ("레벨 추출 정규식 (그룹1=숫자)", self.v_levelpattern, 28),
         ]
         for i, (lab, var, w) in enumerate(rows):
@@ -402,15 +456,6 @@ class App(tk.Tk):
         lrf.grid(row=len(rows), column=1, sticky="w")
         ttk.Entry(lrf, textvariable=self.v_levelregion, width=20).pack(side="left")
         ttk.Button(lrf, text="← 선택 영역", command=lambda: self._apply_to(self.v_levelregion)).pack(side="left")
-
-        ttk.Label(f, text="복구 시퀀스 — 연속 실패 한계 도달 / 개조 불가 감지 시 실행\n"
-                          "(예: 실패팝업 닫기 → 수리 탭 → 아이템 클릭 → 수리 → 확인 → 개조 탭 복귀)",
-                  wraplength=440).pack(anchor="w", pady=(10, 2))
-        self.recovery_editor = SequenceEditor(
-            f, self,
-            lambda: self.cfg["modify"].setdefault("recovery_sequence", []),
-            lambda v: self.cfg["modify"].__setitem__("recovery_sequence", v))
-        self.recovery_editor.pack(fill="both", expand=True, pady=4)
 
     # ---- 탭: 안전장치/타이밍 -----------------------------------------
     def _tab_safety(self, nb):
@@ -583,8 +628,11 @@ class App(tk.Tk):
             messagebox.showinfo("안내", "먼저 화면에서 영역을 드래그하세요.", parent=self)
             return
         reg = list(self.picked_region)
-        if self.v_target.get().startswith("결과"):
+        tgt = self.v_target.get()
+        if tgt.startswith("결과"):
             self.v_result_region.set(str(reg))
+        elif tgt.startswith("레벨"):
+            self.v_levelregion.set(str(reg))
         else:
             self.v_goldregion.set(str(reg))
 
@@ -593,6 +641,12 @@ class App(tk.Tk):
             messagebox.showinfo("안내", "먼저 화면에서 영역을 드래그하세요.", parent=self)
             return
         var.set(str(list(self.picked_region)))
+
+    def _apply_xy(self, var: tk.StringVar):
+        if not self.picked_xy:
+            messagebox.showinfo("안내", "먼저 왼쪽 화면에서 좌표를 클릭하세요.", parent=self)
+            return
+        var.set(f"{self.picked_xy[0]}, {self.picked_xy[1]}")
 
     # ---- OCR 테스트 ---------------------------------------------
     def _ensure_ocr(self):
@@ -634,16 +688,22 @@ class App(tk.Tk):
         r["fail_keywords"] = lines(self.t_fail)
         r["locked_keywords"] = lines(self.t_locked)
         r["region"] = _parse_list(self.v_result_region.get())
-        r.pop("dismiss_sequence", None)  # 구 키 제거
+        for k in ("dismiss_sequence",):
+            r.pop(k, None)
 
         m = self.cfg.setdefault("modify", {})
         m["fail_limit"] = int(self.v_faillimit.get())
         m["target_level"] = int(self.v_targetlevel.get())
         m["start_level"] = int(self.v_startlevel.get())
-        m["target_successes"] = int(self.v_targetsucc.get())
         m["level_region"] = _parse_list(self.v_levelregion.get())
         m["level_pattern"] = self.v_levelpattern.get().strip()
-        m.setdefault("recovery_sequence", [])
+        for k in ("target_successes", "recovery_sequence"):
+            m.pop(k, None)
+
+        sl = self.cfg.setdefault("slots", {})
+        sl["target_count"] = int(self.v_slotcount.get())
+        sl["positions"] = [_parse_list(v.get())[:2] or [0, 0] for v in self.v_slotpos]
+        self.cfg["buy_fail_keywords"] = lines(self.t_buyfail)
 
         s = self.cfg.setdefault("safety", {})
         s["max_attempts"] = int(self.v_max.get())

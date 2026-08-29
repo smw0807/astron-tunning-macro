@@ -21,12 +21,16 @@ from .ocr import Ocr
 from .runner import ROOT, load_config, run_steps
 
 # 실행 결과 코드
-OK = 0            # 목표 성공 횟수 달성
+OK = 0            # 목표 슬롯 수 모두 완료
 MAX_REACHED = 1   # 최대 시도 도달
-LOW_GOLD = 2      # 골드 부족
+LOW_GOLD = 2      # 골드 부족 / 구매 실패
 UNKNOWN = 3       # 결과 화면 인식 실패
 STOPPED = 4       # 사용자 중단
-LOCKED = 5        # 개조 불가 상태인데 복구 시퀀스가 없음
+
+# 슬롯 처리 결과
+_DONE = "done"        # 목표 레벨 도달
+_BRICKED = "bricked"  # 연속 실패로 개조 불가 → 판매 후 재구매
+_ABORT = "abort"      # 전체 중단 (코드 동반)
 
 
 def parse_gold(text: str) -> int | None:
@@ -103,157 +107,190 @@ class Macro:
             self.setup()
         assert self.adb and self.ocr
         cfg = self.cfg
-        timing = cfg["timing"]
-        safety = cfg["safety"]
-        rcfg = cfg["result"]
-        total = max_attempts or safety.get("max_attempts", 100)
+        self._timing = cfg["timing"]
+        self._safety = cfg["safety"]
+        self._rcfg = cfg["result"]
+        self._max = max_attempts or self._safety.get("max_attempts", 100)
 
         if self.adb.package and not self.adb.is_game_foreground():
             self.log(f"경고: 게임({self.adb.package})이 포그라운드가 아닙니다.")
 
         mod = cfg.get("modify", {})
-        fail_limit = int(mod.get("fail_limit", 3))
-        target = int(mod.get("target_successes", 0))
-        target_level = int(mod.get("target_level", 0))
-        start_level = int(mod.get("start_level", 1))
-        level_region = mod.get("level_region")
-        if level_region and (len(level_region) != 4
-                             or level_region[0] >= level_region[2]
-                             or level_region[1] >= level_region[3]):
-            level_region = None       # [0,0,0,0] 등 미설정으로 취급
-        level_pattern = mod.get("level_pattern") or DEFAULT_LEVEL_PATTERN
-        recovery = mod.get("recovery_sequence", [])
-        # 하위호환: 예전 dismiss_sequence 를 fail_sequence 로 사용
-        fail_seq = rcfg.get("fail_sequence", rcfg.get("dismiss_sequence", []))
-        succ_seq = rcfg.get("success_sequence", [])
-        locked_kw = rcfg.get("locked_keywords", [])
+        self._fail_limit = int(mod.get("fail_limit", 3))
+        self._target_level = int(mod.get("target_level", 8))
+        self._start_level = int(mod.get("start_level", 1))
+        lr = mod.get("level_region")
+        if lr and (len(lr) != 4 or lr[0] >= lr[2] or lr[1] >= lr[3]):
+            lr = None
+        self._level_region = lr
+        self._level_pattern = mod.get("level_pattern") or DEFAULT_LEVEL_PATTERN
 
-        shots = ROOT / "captures" / f"run_{datetime.now():%Y%m%d_%H%M%S}"
-        shots.mkdir(parents=True, exist_ok=True)
-        min_gold = safety.get("min_gold", 0)
+        self._fail_seq = self._rcfg.get("fail_sequence", [])
+        self._succ_seq = self._rcfg.get("success_sequence", [])
+        self._locked_kw = self._rcfg.get("locked_keywords", [])
 
-        attempt = 0
-        successes = 0
-        consec_fails = 0
-        cur_level: int | None = None
+        slots = cfg.get("slots", {})
+        target_count = int(slots.get("target_count", 1))
+        positions = slots.get("positions", []) or []
 
-        def read_level(img) -> int | None:
-            if not level_region:
-                return None
-            lv = parse_level(self.ocr.text_dump(img, level_region), level_pattern)
-            return lv
+        self._shots = ROOT / "captures" / f"run_{datetime.now():%Y%m%d_%H%M%S}"
+        self._shots.mkdir(parents=True, exist_ok=True)
+        self._attempt = 0
 
-        def est_level() -> int | None:
-            if cur_level is not None:
-                return cur_level
-            return start_level + successes if start_level else None
+        for slot_no in range(1, target_count + 1):
+            slot_xy = positions[slot_no - 1] if slot_no - 1 < len(positions) else None
+            self.log(f"════════ 슬롯 {slot_no}/{target_count} ════════"
+                     + ("" if slot_xy else "  (슬롯 좌표 미설정!)"))
+            while True:
+                if self._stop():
+                    self.log("사용자 중단.")
+                    return STOPPED
+                rc = self._buy(slot_no, slot_xy)
+                if rc is not None:
+                    return rc
+                outcome, rc = self._modify_slot(slot_no, slot_xy)
+                if outcome == _ABORT:
+                    return rc
+                if outcome == _BRICKED:
+                    self.log(f"슬롯 {slot_no} 아이템 막힘 → 판매 후 재구매")
+                    rc = self._sell(slot_no, slot_xy)
+                    if rc is not None:
+                        return rc
+                    continue
+                self.log(f"✅ 슬롯 {slot_no} 완료 — Lv.{self._target_level} 달성")
+                break
 
-        def status() -> str:
-            parts = [f"성공 {successes}"]
-            if target:
-                parts[0] += f"/{target}"
-            lv = est_level()
-            if lv is not None:
-                parts.append(f"Lv.{lv}" + (f"→{target_level}" if target_level else ""))
-            parts.append(f"연속실패 {consec_fails}/{fail_limit}")
-            return "  ".join(parts)
+        self.log(f"🎉 목표 {target_count}칸 모두 완료.")
+        self._alert()
+        return OK
 
-        def level_reached() -> bool:
-            lv = est_level()
-            return bool(target_level) and lv is not None and lv >= target_level
+    # ---- 골드 -----------------------------------------------------------
+    def _gold_ok(self, img=None) -> bool:
+        min_gold = self._safety.get("min_gold", 0)
+        if not min_gold:
+            return True
+        img = img if img is not None else self.adb.screencap()
+        gold = parse_gold(self.ocr.text_dump(img, self._safety.get("gold_region")))
+        if gold is not None and gold < min_gold:
+            self.log(f"골드 {gold:,} < 최소 {min_gold:,}. 중단.")
+            return False
+        return True
 
-        # 시작 시 이미 목표 레벨이면 바로 종료
-        if target_level:
-            img0 = self.adb.screencap()
-            cur_level = read_level(img0)
-            if level_reached():
-                self.log(f"이미 목표 레벨(Lv.{cur_level} ≥ {target_level}). 할 일 없음.")
-                return OK
+    # ---- 구매 / 판매 --------------------------------------------------
+    def _buy(self, slot_no: int, slot_xy) -> int | None:
+        cfg = self.cfg
+        self.log(f"슬롯 {slot_no}: 아이템 구매")
+        run_steps(self.adb, self.ocr, cfg.get("buy_sequence", []),
+                  self._timing, self._stop, {"slot_xy": slot_xy}, self.log)
+        img = self.adb.screencap()
+        bad = self.ocr.find_any(img, cfg.get("buy_fail_keywords", []))
+        if bad:
+            _, ln = bad
+            self.log(f"구매 실패 ('{ln.text}'). 중단.")
+            return LOW_GOLD
+        if not self._gold_ok(img):
+            return LOW_GOLD
+        return None
 
-        while attempt < total:
+    def _sell(self, slot_no: int, slot_xy) -> int | None:
+        self.log(f"슬롯 {slot_no}: 아이템 판매")
+        run_steps(self.adb, self.ocr, self.cfg.get("sell_sequence", []),
+                  self._timing, self._stop, {"slot_xy": slot_xy}, self.log)
+        return None
+
+    # ---- 레벨 ---------------------------------------------------------
+    def _read_level(self, img) -> int | None:
+        if not self._level_region:
+            return None
+        return parse_level(self.ocr.text_dump(img, self._level_region), self._level_pattern)
+
+    # ---- 한 슬롯 개조 -----------------------------------------------
+    def _modify_slot(self, slot_no: int, slot_xy) -> tuple[str, int | None]:
+        cfg = self.cfg
+        timing = self._timing
+        rcfg = self._rcfg
+        region = rcfg.get("region")
+        consec = 0
+        succ = 0
+        cur_level: int | None = self._read_level(self.adb.screencap())
+        base = cur_level if cur_level is not None else self._start_level
+
+        def level_now() -> int:
+            return cur_level if cur_level is not None else base + succ
+
+        def st() -> str:
+            return (f"슬롯 {slot_no}  Lv.{level_now()}→{self._target_level}  "
+                    f"연속실패 {consec}/{self._fail_limit}")
+
+        if level_now() >= self._target_level:
+            return _DONE, None
+
+        while True:
             if self._stop():
                 self.log("사용자 중단.")
-                return STOPPED
-            attempt += 1
-            self._progress(attempt, total, status())
-            self.log(f"--- 시도 {attempt}/{total}  ({status()}) ---")
+                return _ABORT, STOPPED
+            self._attempt += 1
+            if self._attempt > self._max:
+                self.log(f"최대 시도({self._max}) 도달. 중단.")
+                return _ABORT, MAX_REACHED
+            self._progress(self._attempt, self._max, st())
+            self.log(f"--- 시도 {self._attempt}  ({st()}) ---")
 
-            if min_gold:
-                img = self.adb.screencap()
-                gold = parse_gold(self.ocr.text_dump(img, safety.get("gold_region")))
-                if gold is not None and gold < min_gold:
-                    self.log(f"골드 {gold:,} < 최소 {min_gold:,}. 중단.")
-                    return LOW_GOLD
+            if not self._gold_ok():
+                return _ABORT, LOW_GOLD
 
-            run_steps(self.adb, self.ocr, cfg["attempt_sequence"], timing, self._stop)
+            run_steps(self.adb, self.ocr, cfg["attempt_sequence"],
+                      timing, self._stop, {"slot_xy": slot_xy}, self.log)
             self.adb.wait(timing.get("after_modify", 1.8))
 
-            img = self.adb.screencap()
             import cv2
-            path = shots / f"{attempt:04d}.png"
+            img = self.adb.screencap()
+            path = self._shots / f"{self._attempt:04d}.png"
             cv2.imwrite(str(path), img)
             if self._on_shot:
-                self._on_shot(img, f"시도 {attempt}")
+                self._on_shot(img, f"슬롯{slot_no} 시도{self._attempt}")
 
-            region = rcfg.get("region")
             hit = self.ocr.find_any(img, rcfg["success_keywords"], region)
             if hit:
                 _, ln = hit
-                successes += 1
-                consec_fails = 0
-                lv = read_level(img)
-                if lv is not None:
-                    cur_level = lv
-                elif cur_level is not None:
-                    cur_level += 1          # OCR 실패 시 +1 추정
-                self.log(f"✅ 개조 성공! ('{ln.text}')  누적 성공 {successes}"
-                         + (f"  Lv.{cur_level}" if cur_level is not None else ""))
-                self._progress(attempt, total, status())
-                run_steps(self.adb, self.ocr, succ_seq, timing, self._stop)
-                if level_reached():
-                    self.log(f"목표 레벨 Lv.{target_level} 도달. 중단.")
-                    self._alert()
-                    return OK
-                if target and successes >= target:
-                    self.log(f"목표 성공 {target}회 달성. 중단.")
-                    self._alert()
-                    return OK
+                succ += 1
+                consec = 0
+                lv = self._read_level(img)
+                cur_level = lv if lv is not None else (cur_level + 1 if cur_level is not None else None)
+                self.log(f"✅ 성공 ('{ln.text}')  Lv.{level_now()}")
+                run_steps(self.adb, self.ocr, self._succ_seq, timing, self._stop, log=self.log)
+                if level_now() >= self._target_level:
+                    self.log(f"목표 레벨 Lv.{self._target_level} 도달.")
+                    return _DONE, None
                 self.adb.wait(timing.get("loop_idle", 0.4))
                 continue
 
-            locked = self.ocr.find_any(img, locked_kw, region) if locked_kw else None
+            locked = self.ocr.find_any(img, self._locked_kw, region) if self._locked_kw else None
             fail = self.ocr.find_any(img, rcfg["fail_keywords"], region)
 
             if fail and not locked:
                 _, ln = fail
-                consec_fails += 1
-                self.log(f"❌ 실패 ('{ln.text}')  연속 {consec_fails}/{fail_limit}")
-                run_steps(self.adb, self.ocr, fail_seq, timing, self._stop)
+                consec += 1
+                self.log(f"❌ 실패 ('{ln.text}')  연속 {consec}/{self._fail_limit}")
+                run_steps(self.adb, self.ocr, self._fail_seq, timing, self._stop, log=self.log)
 
-            if locked or (fail and consec_fails >= fail_limit):
-                why = "개조 불가 상태 감지" if locked else f"연속 {fail_limit}회 실패"
-                if not recovery:
-                    self.log(f"⚠ {why}. 복구 시퀀스가 없어 중단합니다. (GUI › 개조 규칙 › 복구 시퀀스)")
-                    return LOCKED
-                self.log(f"🔧 {why} → 복구 시퀀스 실행")
-                run_steps(self.adb, self.ocr, recovery, timing, self._stop)
-                consec_fails = 0
-                self.adb.wait(timing.get("loop_idle", 0.4))
-                continue
+            if locked or (fail and consec >= self._fail_limit):
+                why = "개조 불가 감지" if locked else f"연속 {self._fail_limit}회 실패"
+                self.log(f"🔧 {why} → 슬롯 아이템 판매 대상")
+                if locked:
+                    run_steps(self.adb, self.ocr, self._fail_seq, timing, self._stop, log=self.log)
+                return _BRICKED, None
 
             if fail:
                 self.adb.wait(timing.get("loop_idle", 0.4))
                 continue
 
-            self.log("⚠ 결과 텍스트를 인식하지 못했습니다.")
+            self.log("⚠ 결과 텍스트 인식 실패.")
             self.log(self.ocr.text_dump(img, region) or "  (인식된 텍스트 없음)")
-            if safety.get("stop_on_unknown_screen", True):
+            if self._safety.get("stop_on_unknown_screen", True):
                 self.log(f"중단. 스크린샷: {path}")
-                return UNKNOWN
-            run_steps(self.adb, self.ocr, fail_seq, timing, self._stop)
-
-        self.log(f"최대 시도 횟수({total}) 도달. 누적 성공 {successes}. 중단.")
-        return MAX_REACHED
+                return _ABORT, UNKNOWN
+            run_steps(self.adb, self.ocr, self._fail_seq, timing, self._stop, log=self.log)
 
     def _alert(self) -> None:
         try:

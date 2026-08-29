@@ -34,13 +34,26 @@ def save_config(cfg: dict, path: str | Path = "config.yaml") -> Path:
     return p
 
 
-def run_steps(adb: Adb, ocr: Ocr, steps: list[dict], timing: dict, should_stop=None) -> None:
-    """attempt_sequence / dismiss_sequence 스텝 실행."""
+def run_steps(adb: Adb, ocr: Ocr, steps: list[dict], timing: dict,
+              should_stop=None, ctx: dict | None = None, log=None) -> None:
+    """시퀀스 스텝 실행.
+
+    ctx["slot_xy"] 가 주어지면 {tap_slot: true} 스텝이 그 좌표를 탭한다.
+    """
     stop = should_stop or (lambda: False)
+    ctx = ctx or {}
+    say = log or (lambda m: None)
     for step in steps:
         if stop():
             return
-        if "tap" in step:
+        if "tap_slot" in step:
+            xy = ctx.get("slot_xy")
+            if xy and (xy[0] or xy[1]):
+                adb.tap(xy[0], xy[1])
+                adb.wait(timing.get("after_tap", 0.6))
+            else:
+                say("  (tap_slot: 슬롯 좌표 미설정 — 건너뜀)")
+        elif "tap" in step:
             x, y = step["tap"]
             adb.tap(x, y)
             adb.wait(timing.get("after_tap", 0.6))

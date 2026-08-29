@@ -1,35 +1,57 @@
 # 아스트론 아이템 개조 매크로
 
-BlueStacks 인스턴스에 ADB로 접속해서 `com.ctugames.astron` 의 아이템 개조를
-**성공할 때까지 자동 반복**한다. 결과 판정은 화면 텍스트 OCR(한국어).
-
-**GUI 로 좌표를 찍고 설정한 뒤 그 자리에서 실행**하는 것을 권장한다:
+BlueStacks 인스턴스에 ADB로 접속해서 `com.ctugames.astron` 의 아이템을
+**슬롯별로 구매 → 개조로 목표 레벨까지 올리기 → 다음 슬롯**으로 자동 반복한다.
+결과 판정은 화면 텍스트 OCR(한국어).
 
 ```
 개조매크로.bat        (또는)   python -m src.gui
 ```
 
-GUI 사용 흐름:
-1. 상단에서 ADB 경로/인스턴스명 확인 → **연결/새로고침**. 왼쪽에 게임 화면이 뜬다.
+## 전체 흐름
+
+```
+슬롯 1 …… 슬롯 N (slots.target_count):
+  ├─ 구매 (buy_sequence)  ─ 골드/가방 부족이면 중단
+  ├─ 개조 반복 (attempt_sequence):
+  │    성공 → 레벨 +1, 목표 레벨 도달하면 다음 슬롯
+  │    실패 → 연속 실패 카운트
+  │      └ 연속 실패 == fail_limit(3) → 이 아이템은 막힘
+  └─ 막힘 → 판매 (sell_sequence) → 같은 슬롯 재구매
+모든 슬롯 완료 → 종료 (알림음)
+```
+
+중단: 목표 슬롯 수 완료 · `max_attempts` 초과 · `min_gold` 미만 · 구매 실패 ·
+정지 버튼 · (설정 시) 결과 문구 인식 실패.
+
+## GUI 사용 흐름
+
+1. 상단 ADB 경로/인스턴스명 확인 → **연결/새로고침**. 왼쪽에 게임 화면(960×540).
 2. 왼쪽 화면에서 **클릭 = 좌표**, **드래그 = 영역**.
-3. `개조 시퀀스` 탭에서 `＋선택좌표 tap` 으로 아이템 클릭·개조 버튼을 순서대로 추가.
-4. `결과 판정` 탭에서 성공/실패 키워드 입력, `선택 영역 적용`으로 결과 메시지 영역 지정.
-5. `OCR 테스트` 탭으로 영역이 문구를 잘 읽는지 확인.
-6. `설정 저장` → `실행` 탭에서 **DRY-RUN** 으로 흐름 점검 후 **시작**.
+3. `슬롯 / 구매` 탭:
+   - 채울 슬롯 수, 각 슬롯 아이템 좌표(클릭 후 `← 선택 좌표`)
+   - 구매 시퀀스 (구입탭 → 카테고리 → 아이템 → 구입 → 확인)
+   - 판매 시퀀스 (판매탭 → `tap_slot` → 판매 → 확인)
+   - 구매 실패 키워드
+4. `개조 시퀀스` 탭: 개조탭 → `tap_slot`(현재 슬롯 아이템) → 개조버튼 → 확인
+5. `결과 판정` 탭: 성공/실패/개조불가 키워드, 결과 메시지 영역, 팝업 닫기 시퀀스
+6. `개조 규칙` 탭: 목표 레벨, 연속 실패 한계, 레벨 인식 영역
+7. `OCR 테스트` 탭으로 각 영역이 문구/레벨을 읽는지 확인
+8. `설정 저장` → `실행` 탭에서 **DRY-RUN** 점검 후 **시작**
 
 ## 구성
 
 | 파일 | 역할 |
 |---|---|
-| `config.yaml` | ADB 경로/인스턴스, 좌표, 대기시간, 안전장치, 개조 시퀀스, 결과 키워드 |
+| `config.yaml` | 전체 설정 (GUI 저장 시 재생성) |
 | `src/gui.py` | 설정 GUI + 매크로 실행/로그/OCR 테스트 |
+| `src/macro.py` | 슬롯 순회 + 개조 루프 (`Macro` 클래스, CLI 겸용) |
 | `src/adb.py` | HD-Adb.exe 래퍼 (connect / tap / swipe / screencap) |
 | `src/ocr.py` | RapidOCR(한글) 래퍼 + 키워드 검색 |
-| `src/runner.py` | config 로드/저장 + 시퀀스 실행기 |
-| `src/macro.py` | 개조 반복 루프 (`Macro` 클래스, CLI 겸용) |
+| `src/runner.py` | config 로드/저장 + 시퀀스 실행기 (`tap_slot` 처리) |
 | `tools/calibrate.py` | (CLI) 스크린샷 + 좌표격자 + OCR 덤프 |
 | `tools/tap.py` | (CLI) 단발 탭/스와이프/시퀀스 테스트 |
-| `models/` | 한국어 인식 모델(`korean_rec.onnx`) + 사전(`korean_dict.txt`) |
+| `models/` | 한국어 인식 모델 + 사전 |
 
 ## 설치
 
@@ -43,47 +65,34 @@ curl -sL -o models/korean_rec.onnx  "https://huggingface.co/spaces/RapidAI/Rapid
 curl -sL -o models/korean_dict.txt  "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/release/2.7/ppocr/utils/dict/korean_dict.txt"
 ```
 
-## 캘리브레이션 (최초 1회)
+## 시퀀스 스텝 종류
 
-좌표는 모두 **960x540 캡처 기준 픽셀**이다.
+`buy_sequence` / `sell_sequence` / `attempt_sequence` / `result.*_sequence` 에서 사용:
 
-1. 게임을 개조 가능한 화면(무기상점 등)에 둔다.
-2. `python -m tools.calibrate` — `captures/cal_grid.png`(좌표격자)와 OCR 덤프 확인.
-3. 개조를 **수동으로 1회** 진행하면서 각 단계를 캡처:
-   - `개조` 탭 위치
-   - 개조할 아이템 클릭 위치 (인벤토리 슬롯)
-   - `개조` 실행 버튼 위치
-   - 확인 팝업의 `예`/`확인` 버튼 위치와 영역
-   - **성공** 메시지 문구와 위치 → `result.success_keywords`
-   - **실패** 메시지 문구와 위치 → `result.fail_keywords`
-   - 실패 팝업 닫는 버튼 → `result.dismiss_sequence`
-4. `config.yaml` 의 `attempt_sequence`, `result` 를 채운다.
-5. `python -m tools.tap seq` 로 시퀀스 1회만 실행해 검증.
-
-## 실행 (CLI)
-
-GUI 대신 커맨드로도 실행할 수 있다.
-
-```
-python -m src.macro --dry-run      # 입력 없이 판정 흐름만 확인
-python -m src.macro --max 50       # 실제 실행, 최대 50회
-python -m src.macro                # config 의 max_attempts 까지
-```
-
-성공 시 알림음 후 중단. 매 시도의 결과 스크린샷은 `captures/run_*/` 에 저장.
+| 스텝 | 의미 |
+|---|---|
+| `{tap: [x, y]}` | 좌표 탭 |
+| `{tap_slot: true}` | **현재 처리 중인 슬롯의 아이템 좌표**를 탭 |
+| `{swipe: [x1,y1,x2,y2,ms]}` | 드래그 |
+| `{wait: 초}` | 대기 |
+| `{key: 코드}` | 키 이벤트 (4 = 뒤로가기) |
+| `{tap_if_text: {text: "확인", region: [x1,y1,x2,y2]}}` | 영역에 텍스트 있으면 그 위치 탭 |
 
 ## 개조 규칙 (`config.yaml` › `modify`)
 
 - 아이템 레벨 1~8, 개조 성공 1회 = 레벨 +1
-- `target_level` — 이 레벨에 도달하면 중단 (0 = 미사용)
-- `target_successes` — 누적 성공 N회면 중단 (0 = 미사용)
-- `start_level` / `level_region` / `level_pattern` — 매 성공 후 `level_region` 을 OCR 해
-  현재 레벨을 읽는다. 못 읽으면 `start_level + 성공횟수` 로 추정
-- `fail_limit` — 연속 실패가 이 횟수(기본 3)에 도달하면 `recovery_sequence` 실행 후 카운터 초기화
-- `recovery_sequence` — 개조 불가/막힘 상태 복구 동작 (수리·재구매 등)
+- `target_level` — 슬롯 아이템을 이 레벨까지 올리면 그 슬롯 완료
+- `start_level` — 새 아이템 시작 레벨
+- `level_region` / `level_pattern` — 매 성공 후 `level_region` OCR 로 현재 레벨 확인.
+  못 읽으면 `start_level + 성공횟수` 로 추정
+- `fail_limit` — 연속 실패가 이 횟수(기본 3)면 그 아이템 판매 후 재구매
 
-## 안전장치 (`config.yaml` › `safety`)
+## 실행 (CLI)
 
-- `max_attempts` — 총 시도 초과 시 중단
-- `min_gold` — 골드가 이보다 적으면 중단 (0 = 검사 안 함)
-- `stop_on_unknown_screen` — 성공/실패 문구를 못 읽으면 중단 (오작동 방지)
+```
+python -m src.macro --dry-run     # 입력 없이 흐름만 확인
+python -m src.macro --max 100     # 최대 시도 override
+python -m src.macro               # config 대로
+```
+
+매 시도 결과 스크린샷은 `captures/run_*/` 에 저장.

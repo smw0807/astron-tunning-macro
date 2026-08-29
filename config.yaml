@@ -22,32 +22,62 @@ timing:
   loop_idle: 0.4
 
 safety:
-  max_attempts: 300         # 총 개조 시도 이 횟수 넘으면 중단
+  max_attempts: 500         # 총 개조 시도 이 횟수 넘으면 중단
   min_gold: 100000          # 골드가 이보다 적으면 중단 (0 = 검사 안 함)
   gold_region: [515, 478, 645, 500]
   stop_on_unknown_screen: true   # 성공/실패 문구를 못 읽으면 중단
 
-# 개조 루프 규칙
-modify:
-  fail_limit: 3             # 연속 실패가 이 횟수에 도달하면 recovery_sequence 실행 후 카운터 초기화
-  # 중단 목표 (둘 중 하나라도 만족하면 중단). 개조 성공 1회 = 아이템 레벨 +1.
-  target_level: 8           # 이 레벨 도달 시 중단 (1~8, 0 = 레벨 기준 미사용)
-  target_successes: 0       # 누적 성공 N회면 중단 (0 = 미사용)
-  start_level: 1            # 레벨 OCR 실패 시 성공 횟수로 레벨 추정하는 기준
-  level_region: [0, 0, 0, 0]   # 개조 화면의 아이템 레벨(Lv.N) 표시 영역. GUI로 지정.
-  level_pattern: '(?:lv|레벨)\s*[.:]?\s*([1-8])'   # 레벨 추출 정규식 (그룹1 = 숫자)
-  # 연속 실패 한계 도달 / 개조 불가 감지 시 복구 동작 (수리 / 재구매 등). GUI로 채우기.
-  recovery_sequence: []
+# 슬롯 순회: 슬롯마다 [구매 → 개조로 목표레벨까지 → 다음 슬롯], 막히면 판매 후 재구매.
+slots:
+  target_count: 8          # 채울 슬롯 수 (1~8)
+  # 각 슬롯 아이템 클릭 좌표 (개조/판매 시 아이템 선택). GUI로 지정.
+  positions:
+    - [0, 0]   # 슬롯 1
+    - [0, 0]   # 슬롯 2
+    - [0, 0]   # 슬롯 3
+    - [0, 0]   # 슬롯 4
+    - [0, 0]   # 슬롯 5
+    - [0, 0]   # 슬롯 6
+    - [0, 0]   # 슬롯 7
+    - [0, 0]   # 슬롯 8
 
-# 개조 1회 시도 시퀀스. 매번 처음부터 실행되므로 아이템 재선택까지 포함해 멱등하게 구성.
+# 개조 규칙: 개조 성공 1회 = 아이템 레벨 +1. 연속 3회 실패 = 개조 불가 → 판매.
+modify:
+  fail_limit: 3
+  target_level: 8          # 슬롯 아이템을 이 레벨까지 올리면 완료 (1~8)
+  start_level: 1           # 새 아이템 시작 레벨 (레벨 OCR 실패 시 추정 기준)
+  level_region: [0, 0, 0, 0]   # 개조 화면의 아이템 레벨(Lv.N) 표시 영역. GUI로 지정.
+  level_pattern: '(?:lv|레벨)\s*[.:]?\s*([1-8])'
+
 # step 종류:
-#   {tap: [x,y]} / {swipe: [x1,y1,x2,y2,ms]} / {wait: sec} / {key: code}
-#   {tap_if_text: {text: "확인", region: [x1,y1,x2,y2]}}   영역에 텍스트 있으면 그 위치 탭
+#   {tap: [x,y]} / {tap_slot: true}(현재 슬롯 좌표 탭) / {swipe: [x1,y1,x2,y2,ms]}
+#   {wait: sec} / {key: code} / {tap_if_text: {text: "확인", region: [x1,y1,x2,y2]}}
+
+# 아이템 1개 구매 (구입 탭 → 카테고리 → 목록 아이템 → 구입 → 확인). 매번 같은 아이템.
+buy_sequence:
+  - {tap: [52, 128]}       # '구입' 탭
+  - {wait: 0.5}
+  - {tap: [0, 0]}          # TODO(GUI): 카테고리
+  - {tap: [0, 0]}          # TODO(GUI): 목록에서 아이템
+  - {tap: [0, 0]}          # TODO(GUI): '구입' 버튼
+  - {tap_if_text: {text: "예", region: [380, 260, 580, 320]}}
+buy_fail_keywords: ["골드가 부족", "골드가부족", "가방이 가득", "인벤토리가 가득"]
+
+# 막힌 아이템 판매 (판매 탭 → 슬롯 아이템 클릭 → 판매 → 확인).
+sell_sequence:
+  - {tap: [130, 128]}      # '판매' 탭
+  - {wait: 0.5}
+  - {tap_slot: true}       # 판매할 슬롯 아이템
+  - {tap: [0, 0]}          # TODO(GUI): '판매' 버튼
+  - {tap_if_text: {text: "예", region: [380, 260, 580, 320]}}
+
+# 개조 1회 시도. 매번 처음부터 실행되므로 아이템 재선택 포함.
 attempt_sequence:
-  - {tap: [202, 128]}       # '개조' 탭
+  - {tap: [202, 128]}      # '개조' 탭
   - {wait: 0.8}
-  # TODO(GUI): 개조할 아이템 클릭
-  - {tap: [0, 0]}           # TODO(GUI): '개조' 실행 버튼
+  - {tap_slot: true}       # 현재 슬롯 아이템 클릭
+  - {wait: 0.5}
+  - {tap: [0, 0]}          # TODO(GUI): '개조' 실행 버튼
   - {wait: 1.0}
   - {tap_if_text: {text: "예", region: [380, 260, 580, 320]}}   # 확인 팝업
 
@@ -56,13 +86,10 @@ result:
   region: [300, 230, 660, 320]
   success_keywords: ["개조에 성공", "성공하였", "성공했습니다"]
   fail_keywords: ["개조에 실패", "실패하였", "실패했습니다"]
-  # 개조 불가/막힘 상태를 알리는 문구 (있으면). 감지 시 recovery_sequence 실행.
   locked_keywords: ["개조할 수 없", "더 이상 개조", "개조가 불가"]
-  # 성공 팝업 닫기
   success_sequence:
     - {tap_if_text: {text: "확인", region: [380, 300, 580, 360]}}
     - {wait: 0.6}
-  # 실패 팝업 닫기
   fail_sequence:
     - {tap_if_text: {text: "확인", region: [380, 300, 580, 360]}}
     - {wait: 0.6}
