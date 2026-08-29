@@ -1,0 +1,58 @@
+# 아스트론 아이템 개조 매크로 설정
+# 좌표는 모두 캡처 해상도(screencap) 기준의 픽셀값입니다.
+# tools/calibrate.py 로 좌표를 확인해 채워넣으세요.
+
+adb:
+  # HD-Adb.exe 경로 (BlueStacks 설치 경로에 맞게 수정)
+  path: "C:/Program Files/BlueStacks_nxt/HD-Adb.exe"
+  # 대상 인스턴스. serial 을 지정하면 그 값을 그대로 사용,
+  # 비워두면 instance_name 으로 bluestacks.conf 에서 status.adb_port 를 찾아 연결.
+  serial: "127.0.0.1:64384"
+  instance_name: "개조"
+  bluestacks_conf: "C:/ProgramData/BlueStacks_nxt/bluestacks.conf"
+  package: "com.ctugames.astron"
+
+ocr:
+  rec_model_path: "models/korean_rec.onnx"
+  rec_keys_path: "models/korean_dict.txt"
+  rec_img_shape: [3, 32, 320]
+
+timing:
+  # 각 단계 후 대기 시간(초)
+  after_tap: 0.6
+  after_modify: 1.8      # 개조 버튼 누른 뒤 결과가 뜰 때까지
+  after_confirm: 1.2
+  loop_idle: 0.4
+
+safety:
+  max_attempts: 300         # 이 횟수 넘으면 중단
+  min_gold: 100000          # 골드가 이보다 적으면 중단 (0 이면 검사 안 함)
+  gold_region: [515, 478, 645, 500]  # [x1,y1,x2,y2] 골드 표시 영역
+  stop_on_unknown_screen: true       # 예상 못한 화면이면 중단
+
+# 개조 1회 시도 시퀀스.
+# 각 step 은 아래 중 하나:
+#   {tap: [x, y]}              좌표 탭
+#   {tap_if_text: {text: "확인", region: [x1,y1,x2,y2]}}   해당 영역에 텍스트 보이면 그 위치 탭
+#   {swipe: [x1, y1, x2, y2, ms]}  드래그 (아이템을 슬롯으로)
+#   {wait: 1.0}               초 대기
+#   {key: 4}                  키 이벤트 (4 = 뒤로가기)
+attempt_sequence:
+  - {tap: [202, 128]}          # '개조' 탭 (필요시)
+  - {wait: 0.8}
+  # TODO: 아이템을 개조 슬롯에 올리는 동작 (calibrate 후 채우기)
+  # - {swipe: [486, 354, 480, 300, 400]}
+  - {tap: [0, 0]}             # TODO: '개조' 실행 버튼 좌표
+  - {wait: 1.0}
+  - {tap_if_text: {text: "예", region: [380, 260, 580, 320]}}   # 확인 팝업
+
+# 결과 판정: after_modify 대기 후 result_region 을 OCR 해서
+# success_keywords 중 하나가 보이면 성공(=중단), fail_keywords 면 실패(=계속).
+result:
+  region: [300, 230, 660, 320]     # 결과 메시지가 뜨는 영역
+  success_keywords: ["개조에 성공", "성공하였", "성공했습니다"]
+  fail_keywords: ["개조에 실패", "실패하였", "실패했습니다"]
+  # 실패 팝업을 닫는 동작
+  dismiss_sequence:
+    - {tap_if_text: {text: "확인", region: [380, 300, 580, 360]}}
+    - {wait: 0.6}

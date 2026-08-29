@@ -1,0 +1,70 @@
+"""RapidOCR(한국어) 래퍼 + 화면 텍스트 검색 헬퍼."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+from rapidocr_onnxruntime import RapidOCR
+
+
+@dataclass
+class Line:
+    text: str
+    conf: float
+    cx: float
+    cy: float
+    box: list
+
+
+def _norm(s: str) -> str:
+    return "".join(s.split()).lower()
+
+
+class Ocr:
+    def __init__(self, cfg: dict):
+        o = cfg.get("ocr", {})
+        kwargs = {}
+        if o.get("rec_model_path"):
+            kwargs["rec_model_path"] = o["rec_model_path"]
+        if o.get("rec_keys_path"):
+            kwargs["rec_keys_path"] = o["rec_keys_path"]
+        if o.get("rec_img_shape"):
+            kwargs["rec_img_shape"] = list(o["rec_img_shape"])
+        self.engine = RapidOCR(**kwargs)
+
+    def read(self, img: np.ndarray, region: list | None = None) -> list[Line]:
+        ox, oy = 0, 0
+        crop = img
+        if region:
+            x1, y1, x2, y2 = region
+            ox, oy = x1, y1
+            crop = img[y1:y2, x1:x2]
+        res, _ = self.engine(crop)
+        lines: list[Line] = []
+        for box, text, conf in (res or []):
+            cx = ox + sum(p[0] for p in box) / 4
+            cy = oy + sum(p[1] for p in box) / 4
+            lines.append(Line(text, float(conf), cx, cy, box))
+        return lines
+
+    def find(self, img: np.ndarray, keyword: str, region: list | None = None) -> Line | None:
+        key = _norm(keyword)
+        for ln in self.read(img, region):
+            if key in _norm(ln.text):
+                return ln
+        return None
+
+    def find_any(self, img: np.ndarray, keywords: list[str], region: list | None = None):
+        lines = self.read(img, region)
+        for kw in keywords:
+            key = _norm(kw)
+            for ln in lines:
+                if key in _norm(ln.text):
+                    return kw, ln
+        return None
+
+    def text_dump(self, img: np.ndarray, region: list | None = None) -> str:
+        return "\n".join(
+            f"({int(l.cx):>4},{int(l.cy):>4}) {l.conf:.2f}  {l.text}"
+            for l in self.read(img, region)
+        )
