@@ -1,4 +1,4 @@
-"""아스트론 개조 매크로 - GUI 설정/실행 도구.
+"""아스트로엔 개조 매크로 - GUI 설정/실행 도구.
 
     python -m src.gui
 
@@ -263,7 +263,7 @@ class SequenceEditor(ttk.Frame):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("아스트론 개조 매크로")
+        self.title("아스트로엔 개조 매크로")
         self.geometry("1180x680")
 
         self.cfg = load_config()

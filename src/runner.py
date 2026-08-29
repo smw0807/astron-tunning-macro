@@ -22,7 +22,7 @@ def load_config(path: str | Path = "config.yaml") -> dict:
 
 
 _HEADER = (
-    "# 아스트론 아이템 개조 매크로 설정\n"
+    "# 아스트로엔 아이템 개조 매크로 설정\n"
     "# 좌표는 모두 캡처 해상도(screencap) 기준 픽셀값. GUI(python -m src.gui)로 편집 권장.\n"
     "# 이 파일은 GUI 저장 시 재생성되므로 주석은 유지되지 않습니다.\n\n"
 )
