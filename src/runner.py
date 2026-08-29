@@ -11,16 +11,35 @@ from .ocr import Ocr
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def load_config(path: str | Path = "config.yaml") -> dict:
+def config_path(path: str | Path = "config.yaml") -> Path:
     p = Path(path)
-    if not p.is_absolute():
-        p = ROOT / p
-    return yaml.safe_load(p.read_text(encoding="utf-8"))
+    return p if p.is_absolute() else ROOT / p
 
 
-def run_steps(adb: Adb, ocr: Ocr, steps: list[dict], timing: dict) -> None:
+def load_config(path: str | Path = "config.yaml") -> dict:
+    return yaml.safe_load(config_path(path).read_text(encoding="utf-8"))
+
+
+_HEADER = (
+    "# 아스트론 아이템 개조 매크로 설정\n"
+    "# 좌표는 모두 캡처 해상도(screencap) 기준 픽셀값. GUI(python -m src.gui)로 편집 권장.\n"
+    "# 이 파일은 GUI 저장 시 재생성되므로 주석은 유지되지 않습니다.\n\n"
+)
+
+
+def save_config(cfg: dict, path: str | Path = "config.yaml") -> Path:
+    p = config_path(path)
+    body = yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False, default_flow_style=False)
+    p.write_text(_HEADER + body, encoding="utf-8")
+    return p
+
+
+def run_steps(adb: Adb, ocr: Ocr, steps: list[dict], timing: dict, should_stop=None) -> None:
     """attempt_sequence / dismiss_sequence 스텝 실행."""
+    stop = should_stop or (lambda: False)
     for step in steps:
+        if stop():
+            return
         if "tap" in step:
             x, y = step["tap"]
             adb.tap(x, y)

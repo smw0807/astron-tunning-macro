@@ -3,3 +3,5 @@ numpy>=1.26
 rapidocr-onnxruntime>=1.2
 onnxruntime>=1.17
 PyYAML>=6.0
+pillow>=10.0
+

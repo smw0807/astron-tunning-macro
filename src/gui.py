@@ -1,0 +1,673 @@
+"""아스트론 개조 매크로 - GUI 설정/실행 도구.
+
+    python -m src.gui
+
+왼쪽 스크린샷에서 클릭 → 좌표, 드래그 → 영역을 잡아
+개조 시퀀스/결과 판정 영역에 바로 적용하고, 그 자리에서 매크로를 실행한다.
+"""
+from __future__ import annotations
+
+import copy
+import queue
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
+import cv2
+import numpy as np
+from PIL import Image, ImageTk
+
+from .adb import Adb
+from .macro import Macro
+from .ocr import Ocr
+from .runner import config_path, load_config, save_config
+
+CAP_W, CAP_H = 960, 540
+DISP_W = 720  # 캔버스 표시 폭
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 스텝 편집 다이얼로그
+# ─────────────────────────────────────────────────────────────────────────────
+STEP_TYPES = ["tap", "swipe", "wait", "key", "tap_if_text"]
+
+
+class StepDialog(tk.Toplevel):
+    def __init__(self, master, step: dict | None, picked_xy, picked_region):
+        super().__init__(master)
+        self.title("스텝 편집")
+        self.resizable(False, False)
+        self.result: dict | None = None
+        self.transient(master)
+        self.grab_set()
+
+        step = step or {"tap": [picked_xy[0] if picked_xy else 0,
+                               picked_xy[1] if picked_xy else 0]}
+        self._type = tk.StringVar(value=next(t for t in STEP_TYPES if t in step))
+        self._vars: dict[str, tk.StringVar] = {}
+
+        top = ttk.Frame(self, padding=10)
+        top.pack(fill="both", expand=True)
+        ttk.Label(top, text="종류").grid(row=0, column=0, sticky="w")
+        cb = ttk.Combobox(top, values=STEP_TYPES, textvariable=self._type,
+                          state="readonly", width=14)
+        cb.grid(row=0, column=1, sticky="w", pady=4)
+        cb.bind("<<ComboboxSelected>>", lambda e: self._render())
+
+        self._body = ttk.Frame(top)
+        self._body.grid(row=1, column=0, columnspan=3, sticky="we", pady=6)
+
+        hint = []
+        if picked_xy:
+            hint.append(f"선택 좌표 {picked_xy}")
+        if picked_region:
+            hint.append(f"선택 영역 {picked_region}")
+        self._picked_xy = picked_xy
+        self._picked_region = picked_region
+        if hint:
+            ttk.Label(top, text=" / ".join(hint), foreground="#0a7").grid(
+                row=2, column=0, columnspan=3, sticky="w")
+
+        btns = ttk.Frame(top)
+        btns.grid(row=3, column=0, columnspan=3, pady=(10, 0), sticky="e")
+        ttk.Button(btns, text="확인", command=self._ok).pack(side="left", padx=4)
+        ttk.Button(btns, text="취소", command=self.destroy).pack(side="left")
+
+        self._initial = step
+        self._render()
+
+    def _field(self, parent, label, key, default, row):
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 6))
+        v = tk.StringVar(value=str(default))
+        self._vars[key] = v
+        ttk.Entry(parent, textvariable=v, width=10).grid(row=row, column=1, sticky="w", pady=2)
+
+    def _render(self):
+        for w in self._body.winfo_children():
+            w.destroy()
+        self._vars.clear()
+        t = self._type.get()
+        s = self._initial if t in self._initial else {}
+        px = self._picked_xy or (0, 0)
+        pr = self._picked_region or (0, 0, 0, 0)
+
+        if t == "tap":
+            xy = s.get("tap", list(px))
+            self._field(self._body, "x", "x", xy[0], 0)
+            self._field(self._body, "y", "y", xy[1], 1)
+        elif t == "swipe":
+            v = s.get("swipe", [pr[0], pr[1], pr[2], pr[3], 400])
+            for i, name in enumerate(["x1", "y1", "x2", "y2", "ms"]):
+                self._field(self._body, name, name, v[i] if i < len(v) else (400 if name == "ms" else 0), i)
+        elif t == "wait":
+            self._field(self._body, "초", "sec", s.get("wait", 1.0), 0)
+        elif t == "key":
+            self._field(self._body, "키코드", "code", s.get("key", 4), 0)
+            ttk.Label(self._body, text="(4=뒤로가기)").grid(row=0, column=2, sticky="w")
+        elif t == "tap_if_text":
+            d = s.get("tap_if_text", {})
+            self._field(self._body, "텍스트", "text", d.get("text", "확인"), 0)
+            reg = d.get("region", list(pr))
+            for i, name in enumerate(["rx1", "ry1", "rx2", "ry2"]):
+                self._field(self._body, ["x1", "y1", "x2", "y2"][i], name,
+                            reg[i] if i < len(reg) else 0, i + 1)
+
+    def _ok(self):
+        t = self._type.get()
+        g = lambda k: self._vars[k].get().strip()
+        try:
+            if t == "tap":
+                self.result = {"tap": [int(float(g("x"))), int(float(g("y")))]}
+            elif t == "swipe":
+                self.result = {"swipe": [int(float(g(k))) for k in ("x1", "y1", "x2", "y2", "ms")]}
+            elif t == "wait":
+                self.result = {"wait": float(g("sec"))}
+            elif t == "key":
+                self.result = {"key": int(g("code"))}
+            elif t == "tap_if_text":
+                self.result = {"tap_if_text": {
+                    "text": g("text"),
+                    "region": [int(float(g(k))) for k in ("rx1", "ry1", "rx2", "ry2")],
+                }}
+        except ValueError:
+            messagebox.showerror("입력 오류", "숫자 칸에 올바른 값을 넣어주세요.", parent=self)
+            return
+        self.destroy()
+
+
+def step_label(step: dict) -> str:
+    if "tap" in step:
+        return f"tap  ({step['tap'][0]}, {step['tap'][1]})"
+    if "swipe" in step:
+        v = step["swipe"]
+        return f"swipe ({v[0]},{v[1]}) → ({v[2]},{v[3]})  {v[4] if len(v) > 4 else 300}ms"
+    if "wait" in step:
+        return f"wait  {step['wait']}s"
+    if "key" in step:
+        return f"key   {step['key']}"
+    if "tap_if_text" in step:
+        d = step["tap_if_text"]
+        return f"tap_if_text  '{d.get('text')}'  {d.get('region')}"
+    return str(step)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 시퀀스 편집 위젯 (재사용)
+# ─────────────────────────────────────────────────────────────────────────────
+class SequenceEditor(ttk.Frame):
+    def __init__(self, master, app: "App", get_steps, set_steps):
+        super().__init__(master)
+        self.app = app
+        self._get = get_steps
+        self._set = set_steps
+
+        self.lb = tk.Listbox(self, height=8, activestyle="dotbox")
+        self.lb.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(self, command=self.lb.yview)
+        sb.pack(side="left", fill="y")
+        self.lb.config(yscrollcommand=sb.set)
+
+        col = ttk.Frame(self)
+        col.pack(side="left", fill="y", padx=6)
+        for txt, cmd in [
+            ("추가", self.add), ("편집", self.edit), ("삭제", self.remove),
+            ("▲", lambda: self.move(-1)), ("▼", lambda: self.move(1)),
+            ("＋선택좌표 tap", self.add_picked_tap),
+        ]:
+            ttk.Button(col, text=txt, width=13, command=cmd).pack(pady=2)
+        self.refresh()
+
+    def refresh(self):
+        self.lb.delete(0, "end")
+        for s in self._get():
+            self.lb.insert("end", step_label(s))
+
+    def _sel(self):
+        s = self.lb.curselection()
+        return s[0] if s else None
+
+    def add(self):
+        d = StepDialog(self, None, self.app.picked_xy, self.app.picked_region)
+        self.wait_window(d)
+        if d.result:
+            steps = self._get(); steps.append(d.result); self._set(steps); self.refresh()
+
+    def add_picked_tap(self):
+        if not self.app.picked_xy:
+            messagebox.showinfo("안내", "먼저 왼쪽 화면에서 좌표를 클릭하세요.", parent=self)
+            return
+        steps = self._get()
+        steps.append({"tap": list(self.app.picked_xy)})
+        self._set(steps); self.refresh()
+
+    def edit(self):
+        i = self._sel()
+        if i is None:
+            return
+        d = StepDialog(self, self._get()[i], self.app.picked_xy, self.app.picked_region)
+        self.wait_window(d)
+        if d.result:
+            steps = self._get(); steps[i] = d.result; self._set(steps); self.refresh()
+            self.lb.selection_set(i)
+
+    def remove(self):
+        i = self._sel()
+        if i is None:
+            return
+        steps = self._get(); del steps[i]; self._set(steps); self.refresh()
+
+    def move(self, delta):
+        i = self._sel()
+        if i is None:
+            return
+        j = i + delta
+        steps = self._get()
+        if 0 <= j < len(steps):
+            steps[i], steps[j] = steps[j], steps[i]
+            self._set(steps); self.refresh(); self.lb.selection_set(j)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 메인 앱
+# ─────────────────────────────────────────────────────────────────────────────
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("아스트론 개조 매크로")
+        self.geometry("1180x680")
+
+        self.cfg = load_config()
+        self.scale = DISP_W / CAP_W
+        self.picked_xy: tuple[int, int] | None = None
+        self.picked_region: tuple[int, int, int, int] | None = None
+        self._img_bgr: np.ndarray | None = None
+        self._tkimg = None
+        self._drag_start = None
+
+        self.adb: Adb | None = None
+        self.ocr: Ocr | None = None
+        self.macro_thread: threading.Thread | None = None
+        self.stop_event = threading.Event()
+        self.q: queue.Queue = queue.Queue()
+
+        self._build()
+        self.after(100, self._pump)
+
+    # ---- 레이아웃 ---------------------------------------------------------
+    def _build(self):
+        bar = ttk.Frame(self, padding=6)
+        bar.pack(fill="x")
+        self.v_adb = tk.StringVar(value=self.cfg["adb"].get("path", ""))
+        self.v_inst = tk.StringVar(value=self.cfg["adb"].get("instance_name", ""))
+        self.v_serial = tk.StringVar(value=self.cfg["adb"].get("serial", ""))
+        ttk.Label(bar, text="ADB").pack(side="left")
+        ttk.Entry(bar, textvariable=self.v_adb, width=40).pack(side="left", padx=3)
+        ttk.Button(bar, text="…", width=3, command=self._browse_adb).pack(side="left")
+        ttk.Label(bar, text="  인스턴스명").pack(side="left")
+        ttk.Entry(bar, textvariable=self.v_inst, width=10).pack(side="left", padx=3)
+        ttk.Label(bar, text="serial").pack(side="left")
+        ttk.Entry(bar, textvariable=self.v_serial, width=18).pack(side="left", padx=3)
+        ttk.Button(bar, text="연결/새로고침", command=self.connect_refresh).pack(side="left", padx=6)
+        self.v_status = tk.StringVar(value="미연결")
+        ttk.Label(bar, textvariable=self.v_status, foreground="#c33").pack(side="left")
+
+        body = ttk.Frame(self, padding=6)
+        body.pack(fill="both", expand=True)
+
+        # 왼쪽: 캔버스
+        left = ttk.Frame(body)
+        left.pack(side="left", fill="y")
+        self.canvas = tk.Canvas(left, width=DISP_W, height=int(CAP_H * self.scale),
+                                bg="#222", highlightthickness=1, highlightbackground="#888")
+        self.canvas.pack()
+        self.canvas.bind("<Button-1>", self._on_press)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.canvas.bind("<Motion>", self._on_hover)
+
+        pick = ttk.Frame(left, padding=(0, 6))
+        pick.pack(fill="x")
+        self.v_pick = tk.StringVar(value="클릭=좌표, 드래그=영역")
+        ttk.Label(pick, textvariable=self.v_pick, font=("", 10, "bold")).pack(side="left")
+        ttk.Button(pick, text="화면만 새로고침", command=lambda: self._grab_async()).pack(side="right")
+
+        applyf = ttk.LabelFrame(left, text="선택한 좌표/영역 적용", padding=6)
+        applyf.pack(fill="x")
+        self.v_target = tk.StringVar(value="결과 판정 영역(region)")
+        ttk.Combobox(applyf, textvariable=self.v_target, state="readonly",
+                     values=["결과 판정 영역(region)", "골드 인식 영역(gold_region)"]).pack(fill="x")
+        ttk.Button(applyf, text="선택 영역을 여기에 적용", command=self._apply_region).pack(fill="x", pady=3)
+
+        # 오른쪽: 탭
+        nb = ttk.Notebook(body)
+        nb.pack(side="left", fill="both", expand=True, padx=(8, 0))
+        self._tab_sequence(nb)
+        self._tab_result(nb)
+        self._tab_safety(nb)
+        self._tab_run(nb)
+        self._tab_ocr(nb)
+
+        foot = ttk.Frame(self, padding=6)
+        foot.pack(fill="x")
+        ttk.Button(foot, text="설정 저장", command=self.save).pack(side="left")
+        ttk.Button(foot, text="다시 불러오기", command=self.reload).pack(side="left", padx=4)
+        ttk.Label(foot, text=str(config_path())).pack(side="right")
+
+    # ---- 탭: 시퀀스 -----------------------------------------------------
+    def _tab_sequence(self, nb):
+        f = ttk.Frame(nb, padding=8)
+        nb.add(f, text="개조 시퀀스")
+        ttk.Label(f, text="개조 1회 시도 동작 순서 (아이템 선택 → 개조 버튼 → 확인 팝업)",
+                  wraplength=420).pack(anchor="w")
+        self.seq_editor = SequenceEditor(
+            f, self,
+            lambda: self.cfg.setdefault("attempt_sequence", []),
+            lambda v: self.cfg.__setitem__("attempt_sequence", v))
+        self.seq_editor.pack(fill="both", expand=True, pady=6)
+
+    # ---- 탭: 결과 판정 -------------------------------------------------
+    def _tab_result(self, nb):
+        f = ttk.Frame(nb, padding=8)
+        nb.add(f, text="결과 판정")
+        r = self.cfg.setdefault("result", {})
+
+        ttk.Label(f, text="성공 키워드 (줄바꿈으로 구분, 하나라도 보이면 성공→중단)").pack(anchor="w")
+        self.t_success = tk.Text(f, height=3, width=50)
+        self.t_success.pack(fill="x")
+        self.t_success.insert("1.0", "\n".join(r.get("success_keywords", [])))
+
+        ttk.Label(f, text="실패 키워드 (보이면 팝업 닫고 재시도)").pack(anchor="w", pady=(8, 0))
+        self.t_fail = tk.Text(f, height=3, width=50)
+        self.t_fail.pack(fill="x")
+        self.t_fail.insert("1.0", "\n".join(r.get("fail_keywords", [])))
+
+        rf = ttk.Frame(f)
+        rf.pack(fill="x", pady=8)
+        ttk.Label(rf, text="결과 메시지 영역 [x1,y1,x2,y2]").pack(side="left")
+        self.v_result_region = tk.StringVar(value=str(r.get("region", [300, 230, 660, 320])))
+        ttk.Entry(rf, textvariable=self.v_result_region, width=24).pack(side="left", padx=4)
+
+        ttk.Label(f, text="실패 팝업 닫기 시퀀스").pack(anchor="w", pady=(8, 0))
+        self.dismiss_editor = SequenceEditor(
+            f, self,
+            lambda: self.cfg["result"].setdefault("dismiss_sequence", []),
+            lambda v: self.cfg["result"].__setitem__("dismiss_sequence", v))
+        self.dismiss_editor.pack(fill="both", expand=True, pady=4)
+
+    # ---- 탭: 안전장치/타이밍 -----------------------------------------
+    def _tab_safety(self, nb):
+        f = ttk.Frame(nb, padding=8)
+        nb.add(f, text="안전장치 / 타이밍")
+        s = self.cfg.setdefault("safety", {})
+        t = self.cfg.setdefault("timing", {})
+
+        self.v_max = tk.StringVar(value=str(s.get("max_attempts", 100)))
+        self.v_mingold = tk.StringVar(value=str(s.get("min_gold", 0)))
+        self.v_goldregion = tk.StringVar(value=str(s.get("gold_region", [515, 478, 645, 500])))
+        self.v_stopunknown = tk.BooleanVar(value=bool(s.get("stop_on_unknown_screen", True)))
+
+        grid = ttk.Frame(f)
+        grid.pack(anchor="w")
+        rows = [
+            ("최대 시도 횟수", self.v_max),
+            ("최소 골드 (0=검사안함)", self.v_mingold),
+            ("골드 인식 영역", self.v_goldregion),
+        ]
+        for i, (lab, var) in enumerate(rows):
+            ttk.Label(grid, text=lab).grid(row=i, column=0, sticky="w", pady=3, padx=(0, 8))
+            ttk.Entry(grid, textvariable=var, width=24).grid(row=i, column=1, sticky="w")
+        ttk.Checkbutton(f, text="성공/실패 문구를 못 읽으면 중단 (오작동 방지, 권장)",
+                        variable=self.v_stopunknown).pack(anchor="w", pady=6)
+
+        ttk.Separator(f).pack(fill="x", pady=8)
+        ttk.Label(f, text="대기 시간(초)", font=("", 10, "bold")).pack(anchor="w")
+        self.timing_vars = {}
+        tg = ttk.Frame(f)
+        tg.pack(anchor="w")
+        defs = [("after_tap", 0.6), ("after_modify", 1.8), ("after_confirm", 1.2), ("loop_idle", 0.4)]
+        for i, (k, dv) in enumerate(defs):
+            ttk.Label(tg, text=k).grid(row=i, column=0, sticky="w", pady=2, padx=(0, 8))
+            v = tk.StringVar(value=str(t.get(k, dv)))
+            self.timing_vars[k] = v
+            ttk.Entry(tg, textvariable=v, width=8).grid(row=i, column=1, sticky="w")
+
+    # ---- 탭: 실행 -----------------------------------------------------
+    def _tab_run(self, nb):
+        f = ttk.Frame(nb, padding=8)
+        nb.add(f, text="실행")
+        top = ttk.Frame(f)
+        top.pack(fill="x")
+        self.v_dry = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="DRY-RUN (입력 안 보냄)", variable=self.v_dry).pack(side="left")
+        ttk.Label(top, text="  최대 횟수 override").pack(side="left")
+        self.v_runmax = tk.StringVar(value="")
+        ttk.Entry(top, textvariable=self.v_runmax, width=6).pack(side="left", padx=3)
+        self.btn_start = ttk.Button(top, text="시작", command=self.start_macro)
+        self.btn_start.pack(side="left", padx=6)
+        self.btn_stop = ttk.Button(top, text="정지", command=self.stop_macro, state="disabled")
+        self.btn_stop.pack(side="left")
+
+        self.v_prog = tk.StringVar(value="대기 중")
+        ttk.Label(f, textvariable=self.v_prog, font=("", 11, "bold")).pack(anchor="w", pady=6)
+
+        self.log = tk.Text(f, height=18, bg="#111", fg="#ddd", insertbackground="#ddd")
+        self.log.pack(fill="both", expand=True)
+        self.log.config(state="disabled")
+
+    # ---- 탭: OCR 테스트 ---------------------------------------------
+    def _tab_ocr(self, nb):
+        f = ttk.Frame(nb, padding=8)
+        nb.add(f, text="OCR 테스트")
+        top = ttk.Frame(f)
+        top.pack(fill="x")
+        ttk.Button(top, text="현재 화면 OCR", command=self._ocr_full).pack(side="left")
+        ttk.Button(top, text="선택 영역만 OCR", command=self._ocr_region).pack(side="left", padx=4)
+        self.ocr_out = tk.Text(f, height=20, bg="#111", fg="#9f9")
+        self.ocr_out.pack(fill="both", expand=True, pady=6)
+
+    # ---- ADB / 화면 -------------------------------------------------
+    def _browse_adb(self):
+        p = filedialog.askopenfilename(title="HD-Adb.exe 선택",
+                                       filetypes=[("exe", "*.exe"), ("all", "*.*")])
+        if p:
+            self.v_adb.set(p)
+
+    def _sync_adb_cfg(self):
+        self.cfg["adb"]["path"] = self.v_adb.get().strip()
+        self.cfg["adb"]["instance_name"] = self.v_inst.get().strip()
+        self.cfg["adb"]["serial"] = self.v_serial.get().strip()
+
+    def connect_refresh(self):
+        self._sync_adb_cfg()
+        try:
+            self.adb = Adb(self.cfg)
+            self.adb.connect()
+            self.v_serial.set(self.adb.serial)
+            self.v_status.set(f"연결됨 {self.adb.serial}")
+            self._grab_async()
+        except Exception as e:
+            self.v_status.set("연결 실패")
+            messagebox.showerror("연결 실패", str(e))
+
+    def _grab_async(self):
+        if not self.adb:
+            return
+        threading.Thread(target=self._grab_worker, daemon=True).start()
+
+    def _grab_worker(self):
+        try:
+            img = self.adb.screencap()
+            self.q.put(("img", img))
+        except Exception as e:
+            self.q.put(("log", f"스크린샷 실패: {e}"))
+
+    def _show_img(self, bgr):
+        self._img_bgr = bgr
+        disp = cv2.resize(bgr, (DISP_W, int(bgr.shape[0] * self.scale)))
+        rgb = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
+        self._tkimg = ImageTk.PhotoImage(Image.fromarray(rgb))
+        self.canvas.delete("all")
+        self.canvas.create_image(0, 0, anchor="nw", image=self._tkimg)
+        self._redraw_pick()
+
+    def _redraw_pick(self):
+        self.canvas.delete("pick")
+        s = self.scale
+        if self.picked_region:
+            x1, y1, x2, y2 = self.picked_region
+            self.canvas.create_rectangle(x1 * s, y1 * s, x2 * s, y2 * s,
+                                         outline="#0f0", width=2, tags="pick")
+        if self.picked_xy:
+            x, y = self.picked_xy
+            self.canvas.create_line(x * s - 8, y * s, x * s + 8, y * s, fill="#ff0", width=2, tags="pick")
+            self.canvas.create_line(x * s, y * s - 8, x * s, y * s + 8, fill="#ff0", width=2, tags="pick")
+
+    # ---- 캔버스 이벤트 --------------------------------------------
+    def _to_cap(self, ev):
+        return int(ev.x / self.scale), int(ev.y / self.scale)
+
+    def _on_hover(self, ev):
+        cx, cy = self._to_cap(ev)
+        self.v_pick.set(f"커서 ({cx}, {cy})  |  " + self._pick_text())
+
+    def _pick_text(self):
+        parts = []
+        if self.picked_xy:
+            parts.append(f"좌표 {self.picked_xy}")
+        if self.picked_region:
+            parts.append(f"영역 {list(self.picked_region)}")
+        return "  ".join(parts) if parts else "선택 없음"
+
+    def _on_press(self, ev):
+        self._drag_start = self._to_cap(ev)
+
+    def _on_drag(self, ev):
+        if not self._drag_start:
+            return
+        x1, y1 = self._drag_start
+        x2, y2 = self._to_cap(ev)
+        self.picked_region = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+        self._redraw_pick()
+        self.v_pick.set(self._pick_text())
+
+    def _on_release(self, ev):
+        x2, y2 = self._to_cap(ev)
+        x1, y1 = self._drag_start or (x2, y2)
+        if abs(x2 - x1) < 4 and abs(y2 - y1) < 4:
+            self.picked_xy = (x2, y2)          # 클릭 = 좌표
+        else:
+            self.picked_region = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+        self._redraw_pick()
+        self.v_pick.set(self._pick_text())
+
+    def _apply_region(self):
+        if not self.picked_region:
+            messagebox.showinfo("안내", "먼저 화면에서 영역을 드래그하세요.", parent=self)
+            return
+        reg = list(self.picked_region)
+        if self.v_target.get().startswith("결과"):
+            self.v_result_region.set(str(reg))
+        else:
+            self.v_goldregion.set(str(reg))
+
+    # ---- OCR 테스트 ---------------------------------------------
+    def _ensure_ocr(self):
+        if self.ocr is None:
+            self.ocr = Ocr(self.cfg)
+        return self.ocr
+
+    def _ocr_full(self):
+        self._run_ocr(None)
+
+    def _ocr_region(self):
+        if not self.picked_region:
+            messagebox.showinfo("안내", "먼저 화면에서 영역을 드래그하세요.", parent=self)
+            return
+        self._run_ocr(list(self.picked_region))
+
+    def _run_ocr(self, region):
+        if self._img_bgr is None:
+            messagebox.showinfo("안내", "먼저 연결/새로고침으로 화면을 가져오세요.", parent=self)
+            return
+        self.ocr_out.delete("1.0", "end")
+        self.ocr_out.insert("end", "OCR 실행 중...\n")
+        self.update_idletasks()
+
+        def work():
+            try:
+                dump = self._ensure_ocr().text_dump(self._img_bgr, region)
+                self.q.put(("ocr", dump or "(인식된 텍스트 없음)"))
+            except Exception as e:
+                self.q.put(("ocr", f"오류: {e}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    # ---- 설정 저장/로드 -----------------------------------------
+    def _collect(self):
+        self._sync_adb_cfg()
+        r = self.cfg.setdefault("result", {})
+        r["success_keywords"] = [x.strip() for x in self.t_success.get("1.0", "end").splitlines() if x.strip()]
+        r["fail_keywords"] = [x.strip() for x in self.t_fail.get("1.0", "end").splitlines() if x.strip()]
+        r["region"] = _parse_list(self.v_result_region.get())
+
+        s = self.cfg.setdefault("safety", {})
+        s["max_attempts"] = int(self.v_max.get())
+        s["min_gold"] = int(self.v_mingold.get())
+        s["gold_region"] = _parse_list(self.v_goldregion.get())
+        s["stop_on_unknown_screen"] = bool(self.v_stopunknown.get())
+
+        t = self.cfg.setdefault("timing", {})
+        for k, v in self.timing_vars.items():
+            t[k] = float(v.get())
+
+    def save(self):
+        try:
+            self._collect()
+            p = save_config(self.cfg)
+            self._log_line(f"설정 저장됨: {p}")
+            messagebox.showinfo("저장", f"저장 완료\n{p}")
+        except Exception as e:
+            messagebox.showerror("저장 실패", str(e))
+
+    def reload(self):
+        self.cfg = load_config()
+        messagebox.showinfo("다시 불러오기", "config.yaml 을 다시 불러왔습니다. 창을 다시 열면 반영됩니다.")
+
+    # ---- 매크로 실행 -------------------------------------------
+    def start_macro(self):
+        if self.macro_thread and self.macro_thread.is_alive():
+            return
+        try:
+            self._collect()
+        except Exception as e:
+            messagebox.showerror("설정 오류", str(e))
+            return
+        cfg = copy.deepcopy(self.cfg)
+        dry = self.v_dry.get()
+        mx = int(self.v_runmax.get()) if self.v_runmax.get().strip() else None
+        self.stop_event.clear()
+        self.btn_start.config(state="disabled")
+        self.btn_stop.config(state="normal")
+        self._log_line("=" * 40)
+
+        def work():
+            try:
+                m = Macro(
+                    cfg, dry_run=dry,
+                    on_log=lambda s: self.q.put(("log", s)),
+                    should_stop=self.stop_event.is_set,
+                    on_progress=lambda a, b, c: self.q.put(("prog", f"{c}  {a}/{b}")),
+                    on_shot=lambda img, tag: self.q.put(("img", img)),
+                )
+                code = m.run(mx)
+                self.q.put(("log", f"종료 코드 {code}"))
+            except Exception as e:
+                self.q.put(("log", f"오류: {e}"))
+            finally:
+                self.q.put(("done", None))
+
+        self.macro_thread = threading.Thread(target=work, daemon=True)
+        self.macro_thread.start()
+
+    def stop_macro(self):
+        self.stop_event.set()
+        self._log_line("정지 요청됨...")
+
+    # ---- 큐 펌프 ----------------------------------------------
+    def _pump(self):
+        try:
+            while True:
+                kind, payload = self.q.get_nowait()
+                if kind == "log":
+                    self._log_line(payload)
+                elif kind == "img":
+                    self._show_img(payload)
+                elif kind == "prog":
+                    self.v_prog.set(payload)
+                elif kind == "ocr":
+                    self.ocr_out.delete("1.0", "end")
+                    self.ocr_out.insert("end", payload)
+                elif kind == "done":
+                    self.btn_start.config(state="normal")
+                    self.btn_stop.config(state="disabled")
+                    self.v_prog.set("대기 중")
+        except queue.Empty:
+            pass
+        self.after(100, self._pump)
+
+    def _log_line(self, s: str):
+        self.log.config(state="normal")
+        self.log.insert("end", s + "\n")
+        self.log.see("end")
+        self.log.config(state="disabled")
+
+
+def _parse_list(s: str) -> list[int]:
+    return [int(float(x)) for x in s.strip().strip("[]()").split(",") if x.strip()]
+
+
+def main():
+    App().mainloop()
+
+
+if __name__ == "__main__":
+    main()
