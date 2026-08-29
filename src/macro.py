@@ -273,16 +273,34 @@ class Macro:
                 self._run_seq("개조 재진입", cfg.get("modify_enter_sequence", []), slot_xy)
                 continue
             dialog_fails = 0
-            self.adb.wait(timing.get("after_modify", 1.8))
+            self.adb.wait(timing.get("after_modify", 1.2))
 
-            img = self.adb.screencap()
+            # 결과 말풍선은 글자가 타이핑되며 나타나므로, 키워드가 잡힐 때까지 폴링한다.
+            poll = timing.get("poll_interval", 0.5)
+            tries = int(rcfg.get("result_tries", 6))
+            img = None
+            hit = fail = locked = None
+            for _i in range(tries):
+                if self._stop():
+                    self.log("사용자 중단.")
+                    return _ABORT, STOPPED
+                img = self.adb.screencap()
+                hit = self.ocr.find_any(img, rcfg["success_keywords"], region)
+                if hit:
+                    break
+                locked = self.ocr.find_any(img, self._locked_kw, region) if self._locked_kw else None
+                fail = self.ocr.find_any(img, rcfg["fail_keywords"], region)
+                if fail or locked:
+                    break
+                if _i < tries - 1:
+                    self.adb.wait(poll)
+
             path = self._shots / f"{self._attempt:04d}.png"
             if self._save_shots == "all":
                 self._write_shot(img, path)
             if self._on_shot:
                 self._on_shot(img, f"슬롯{slot_no} 시도{self._attempt}")
 
-            hit = self.ocr.find_any(img, rcfg["success_keywords"], region)
             if hit:
                 _, ln = hit
                 succ += 1
@@ -296,9 +314,6 @@ class Macro:
                     return _DONE, None
                 self.adb.wait(timing.get("loop_idle", 0.4))
                 continue
-
-            locked = self.ocr.find_any(img, self._locked_kw, region) if self._locked_kw else None
-            fail = self.ocr.find_any(img, rcfg["fail_keywords"], region)
 
             if fail and not locked:
                 _, ln = fail
@@ -319,7 +334,7 @@ class Macro:
                 self.adb.wait(timing.get("loop_idle", 0.4))
                 continue
 
-            self.log("⚠ 결과 텍스트 인식 실패.")
+            self.log(f"⚠ 결과 텍스트 {tries}회 확인했으나 성공/실패 문구 인식 실패.")
             self.log(self.ocr.text_dump(img, region) or "  (인식된 텍스트 없음)")
             if self._save_shots != "none":
                 self._write_shot(img, path)

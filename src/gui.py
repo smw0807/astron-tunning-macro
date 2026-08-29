@@ -443,6 +443,12 @@ class App(tk.Tk):
         ttk.Entry(rf, textvariable=self.v_result_region, width=24).pack(side="left", padx=4)
         ttk.Button(rf, text="← 선택 영역", command=lambda: self._apply_to(self.v_result_region)).pack(side="left")
 
+        rt = ttk.Frame(f)
+        rt.pack(fill="x")
+        ttk.Label(rt, text="결과 확인 횟수 (말풍선 타이핑 연출 대비 폴링)").pack(side="left")
+        self.v_result_tries = tk.StringVar(value=str(r.get("result_tries", 6)))
+        ttk.Entry(rt, textvariable=self.v_result_tries, width=5).pack(side="left", padx=4)
+
         cols = ttk.Frame(f)
         cols.pack(fill="both", expand=True, pady=4)
         lc = ttk.LabelFrame(cols, text="성공 팝업 닫기 시퀀스", padding=4)
@@ -731,6 +737,7 @@ class App(tk.Tk):
         r["fail_keywords"] = lines(self.t_fail)
         r["locked_keywords"] = lines(self.t_locked)
         r["region"] = _parse_list(self.v_result_region.get())
+        r["result_tries"] = int(self.v_result_tries.get())
         for k in ("dismiss_sequence",):
             r.pop(k, None)
 

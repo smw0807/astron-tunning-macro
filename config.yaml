@@ -18,7 +18,7 @@ ocr:
   max_threads: 2       # OCR 이 CPU 다 물어서 PC 렉 걸리는 것 방지
 timing:
   after_tap: 0.6
-  after_modify: 2.2
+  after_modify: 1.2    # 개조 버튼 후 결과 폴링 시작 전 대기 (이후 poll_interval 로 재확인)
   after_confirm: 1.2
   loop_idle: 0.4
   poll_interval: 0.5   # wait_text 가 화면 다시 캡처하는 간격
@@ -146,6 +146,7 @@ result:
   - 2
   - 406
   - 102
+  result_tries: 6        # 결과 말풍선(타이핑 연출) 확인 횟수. poll_interval 간격으로 재캡처
   success_keywords:
   - 축하해요.
   - 축하
