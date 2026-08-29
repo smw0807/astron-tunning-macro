@@ -59,25 +59,25 @@ modify:
   - 0
   level_pattern: (?:lv|레벨)\s*[.:]?\s*([1-8])
 buy_sequence:
-- tap:            # 1. 왼쪽 상단 '구입' 버튼
-  - 52
-  - 128
+- tap:
+  - 49
+  - 126
 - wait: 0.5
-- tap:            # 2. 구매할 아이템 (TODO: GUI 슬롯/구매 탭에서 좌표 지정)
-  - 0
-  - 0
+- tap:
+  - 57
+  - 357
 - wait: 0.4
-- wait_text:      # 3. 구입/취소 다이얼로그 활성화 확인
+- wait_text:
     text: 취소
     timeout: 3.0
-    region:       # TODO: GUI 로 다이얼로그 영역 지정
+    region:
     - 330
     - 210
     - 630
     - 360
-- tap:            # 4. 다이얼로그의 '구입' 버튼 (TODO: GUI 로 좌표 지정)
-  - 0
-  - 0
+- tap:
+  - 476
+  - 240
 - wait: 0.6
 buy_fail_keywords:
 - 골드가 부족
@@ -85,21 +85,24 @@ buy_fail_keywords:
 - 가방이 가득
 - 인벤토리가 가득
 sell_sequence:
-- tap:
-  - 130
-  - 128
+- tap:            # 1. 왼쪽 상단 '판매' 버튼 (TODO: GUI 로 좌표 확인)
+  - 127
+  - 126
 - wait: 0.5
-- tap_slot: true
-- tap:
-  - 0
-  - 0
-- tap_if_text:
-    text: 예
+- tap_slot: true  # 2. 3회 실패한 슬롯 아이템 클릭
+- wait: 0.4
+- wait_text:      # 3. 판매/취소 다이얼로그 출력 확인
+    text: 취소
+    timeout: 3.0
     region:
-    - 380
-    - 260
-    - 580
-    - 320
+    - 330
+    - 210
+    - 630
+    - 360
+- tap:            # 4. 다이얼로그의 '판매' 버튼 (TODO: GUI 로 좌표 지정)
+  - 0
+  - 0
+- wait: 0.6
 attempt_sequence:
 - tap:
   - 202
