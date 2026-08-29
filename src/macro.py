@@ -177,11 +177,24 @@ class Macro:
         return True
 
     # ---- 구매 / 판매 --------------------------------------------------
+    def _run_seq(self, name: str, steps: list, slot_xy, retries: int = 3) -> bool:
+        """required 스텝 실패 시 재시도. 성공하면 True."""
+        for i in range(1, retries + 1):
+            try:
+                run_steps(self.adb, self.ocr, steps, self._timing,
+                          self._stop, {"slot_xy": slot_xy}, self.log)
+                return True
+            except SequenceError as e:
+                self.log(f"⚠ {name} 시퀀스 중단: {e}  (재시도 {i}/{retries})")
+                self.adb.wait(1.0)
+        return False
+
     def _buy(self, slot_no: int, slot_xy) -> int | None:
         cfg = self.cfg
         self.log(f"슬롯 {slot_no}: 아이템 구매")
-        run_steps(self.adb, self.ocr, cfg.get("buy_sequence", []),
-                  self._timing, self._stop, {"slot_xy": slot_xy}, self.log)
+        if not self._run_seq("구매", cfg.get("buy_sequence", []), slot_xy):
+            self.log("구매 시퀀스 반복 실패. 중단.")
+            return UNKNOWN
         img = self.adb.screencap()
         bad = self.ocr.find_any(img, cfg.get("buy_fail_keywords", []))
         if bad:
@@ -194,8 +207,9 @@ class Macro:
 
     def _sell(self, slot_no: int, slot_xy) -> int | None:
         self.log(f"슬롯 {slot_no}: 아이템 판매")
-        run_steps(self.adb, self.ocr, self.cfg.get("sell_sequence", []),
-                  self._timing, self._stop, {"slot_xy": slot_xy}, self.log)
+        if not self._run_seq("판매", self.cfg.get("sell_sequence", []), slot_xy):
+            self.log("판매 시퀀스 반복 실패. 중단.")
+            return UNKNOWN
         return None
 
     # ---- 레벨 ---------------------------------------------------------

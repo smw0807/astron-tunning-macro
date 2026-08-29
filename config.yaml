@@ -102,7 +102,20 @@ sell_sequence:
 - tap:
   - 472
   - 238
-- wait: 0.6
+- wait: 0.5
+- wait_text:
+    text: 정말로 판매
+    timeout: 3.0
+    required: true
+    region:
+    - 330
+    - 220
+    - 630
+    - 270
+- tap:
+  - 440
+  - 307
+- wait: 0.8
 attempt_sequence:
 - tap:
   - 202
