@@ -13,20 +13,21 @@ import cv2
 class Adb:
     def __init__(self, cfg: dict):
         a = cfg["adb"]
+        self._a = a
         self.exe = a["path"]
         self.package = a.get("package")
-        self.serial = a.get("serial") or self._resolve_serial(a)
+        self.serial = a.get("serial") or self._resolve_serial(a) or self._only_local_device()
         if not self.serial:
             raise RuntimeError("adb serial 을 확인할 수 없습니다. config.yaml 의 adb.serial 을 직접 지정하세요.")
 
     # ---- 연결 ----------------------------------------------------------------
     def _resolve_serial(self, a: dict) -> str | None:
+        """bluestacks.conf 에서 instance_name(display_name) 의 adb_port 를 찾는다."""
         name = a.get("instance_name")
         conf = a.get("bluestacks_conf")
         if not name or not conf or not Path(conf).exists():
             return None
         text = Path(conf).read_text(encoding="utf-8", errors="ignore")
-        # display_name 이 name 인 인스턴스 키를 찾는다
         m = re.search(rf'bst\.instance\.([^.]+)\.display_name="{re.escape(name)}"', text)
         if not m:
             return None
@@ -36,11 +37,39 @@ class Adb:
             return None
         return f"127.0.0.1:{m2.group(1)}"
 
+    def _list_online(self) -> list[str]:
+        out = self._run(["devices"], device=False)
+        found = []
+        for line in out.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) == 2 and parts[1] == "device":
+                found.append(parts[0])
+        return found
+
+    def _only_local_device(self) -> str | None:
+        """이미 붙어있는 127.0.0.1 기기가 하나뿐이면 그걸 쓴다."""
+        local = [d for d in self._list_online() if d.startswith("127.0.0.1:")]
+        return local[0] if len(local) == 1 else None
+
+    def _is_online(self, serial: str) -> bool:
+        return serial in self._list_online()
+
     def connect(self) -> None:
         self._run(["connect", self.serial], device=False)
-        out = self._run(["devices"], device=False)
-        if self.serial not in out or "device" not in out.split(self.serial)[-1][:20]:
-            raise RuntimeError(f"기기 연결 실패: {self.serial}\n{out}")
+        if self._is_online(self.serial):
+            return
+        # 포트가 바뀐 경우(블루스택 재시작 등) 재탐색
+        alt = self._resolve_serial(self._a) or self._only_local_device()
+        if alt and alt != self.serial:
+            self._run(["connect", alt], device=False)
+            if self._is_online(alt):
+                self.serial = alt
+                return
+        raise RuntimeError(
+            f"기기 연결 실패: {self.serial}\n"
+            f"현재 온라인: {self._list_online() or '(없음)'}\n"
+            f"BlueStacks 가 켜져 있는지, config.yaml 의 adb.instance_name 이 맞는지 확인하세요."
+        )
 
     # ---- 저수준 실행 -------------------------------------------------------
     def _run(self, args: list[str], device: bool = True, binary: bool = False):

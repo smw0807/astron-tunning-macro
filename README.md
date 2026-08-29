@@ -13,11 +13,12 @@ BlueStacks 인스턴스에 ADB로 접속해서 `com.ctugames.astron` 의 아이�
 ```
 슬롯 1 …… 슬롯 N (slots.target_count):
   ├─ 구매 (buy_sequence)  ─ 골드/가방 부족이면 중단
-  ├─ 개조 반복 (attempt_sequence):
+  ├─ 개조 진입 (modify_enter_sequence)  ─ '개조' 탭 클릭 → 커서 개조 상태 (1회)
+  ├─ 개조 반복 (attempt_sequence)  ─ 아이템 클릭 → 다이얼로그 → [개조] 버튼:
   │    성공 → 레벨 +1, 목표 레벨 도달하면 다음 슬롯
   │    실패 → 연속 실패 카운트
   │      └ 연속 실패 == fail_limit(3) → 이 아이템은 막힘
-  └─ 막힘 → 판매 (sell_sequence) → 같은 슬롯 재구매
+  └─ 막힘 → 판매 (sell_sequence) → 같은 슬롯 재구매 → 개조 진입부터 다시
 모든 슬롯 완료 → 종료 (알림음)
 ```
 
@@ -33,7 +34,9 @@ BlueStacks 인스턴스에 ADB로 접속해서 `com.ctugames.astron` 의 아이�
    - 구매 시퀀스 (구입탭 → 카테고리 → 아이템 → 구입 → 확인)
    - 판매 시퀀스 (판매탭 → `tap_slot` → 판매 → 확인)
    - 구매 실패 키워드
-4. `개조 시퀀스` 탭: 개조탭 → `tap_slot`(현재 슬롯 아이템) → 개조버튼 → 확인
+4. `개조 시퀀스` 탭:
+   - 진입 시퀀스: `개조` 탭 클릭 (커서 개조 상태 진입, 슬롯당 1회)
+   - 개조 1회 시퀀스: `tap_slot` → wait_text(대박개조) → [개조] 버튼 → 확인 (반복)
 5. `결과 판정` 탭: 성공/실패/개조불가 키워드, 결과 메시지 영역, 팝업 닫기 시퀀스
 6. `개조 규칙` 탭: 목표 레벨, 연속 실패 한계, 레벨 인식 영역
 7. `OCR 테스트` 탭으로 각 영역이 문구/레벨을 읽는지 확인
@@ -67,7 +70,7 @@ curl -sL -o models/korean_dict.txt  "https://raw.githubusercontent.com/PaddlePad
 
 ## 시퀀스 스텝 종류
 
-`buy_sequence` / `sell_sequence` / `attempt_sequence` / `result.*_sequence` 에서 사용:
+`buy_sequence` / `sell_sequence` / `modify_enter_sequence` / `attempt_sequence` / `result.*_sequence` 에서 사용:
 
 | 스텝 | 의미 |
 |---|---|

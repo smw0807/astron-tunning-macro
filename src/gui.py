@@ -396,14 +396,24 @@ class App(tk.Tk):
     def _tab_sequence(self, nb):
         f = ttk.Frame(nb, padding=8)
         nb.add(f, text="개조 시퀀스")
-        ttk.Label(f, text="개조 1회 시도 순서. 'tap_slot' = 현재 슬롯 아이템 클릭.\n"
-                          "예: 개조탭 → tap_slot → 개조버튼 → 확인",
-                  wraplength=420).pack(anchor="w")
+
+        e1 = ttk.LabelFrame(f, text="진입 시퀀스 — 슬롯 진입/판매 후 1회 ('개조' 탭 클릭 → 커서 개조 상태)",
+                            padding=4)
+        e1.pack(fill="both", expand=True, pady=(0, 6))
+        self.enter_editor = SequenceEditor(
+            e1, self,
+            lambda: self.cfg.setdefault("modify_enter_sequence", []),
+            lambda v: self.cfg.__setitem__("modify_enter_sequence", v))
+        self.enter_editor.pack(fill="both", expand=True)
+
+        e2 = ttk.LabelFrame(f, text="개조 1회 시퀀스 — 성공/실패와 무관하게 반복 "
+                                    "(tap_slot=아이템 클릭 → 다이얼로그 → [개조] 버튼)", padding=4)
+        e2.pack(fill="both", expand=True)
         self.seq_editor = SequenceEditor(
-            f, self,
+            e2, self,
             lambda: self.cfg.setdefault("attempt_sequence", []),
             lambda v: self.cfg.__setitem__("attempt_sequence", v))
-        self.seq_editor.pack(fill="both", expand=True, pady=6)
+        self.seq_editor.pack(fill="both", expand=True)
 
     # ---- 탭: 결과 판정 -------------------------------------------------
     def _tab_result(self, nb):

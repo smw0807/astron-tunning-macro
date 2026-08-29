@@ -4,7 +4,7 @@
 
 adb:
   path: C:/Program Files/BlueStacks_nxt/HD-Adb.exe
-  serial: 127.0.0.1:64384
+  serial: ''            # 비우면 instance_name 으로 자동 탐색 (블루스택 재시작 시 포트 변경 대응)
   instance_name: 개조
   bluestacks_conf: C:/ProgramData/BlueStacks_nxt/bluestacks.conf
   package: com.ctugames.astron
@@ -22,14 +22,14 @@ timing:
   loop_idle: 0.4
 safety:
   max_attempts: 500
-  min_gold: 100000
+  min_gold: 0
   gold_region:
   - 515
   - 478
   - 645
   - 500
   stop_on_unknown_screen: true
-  save_shots: events   # 스크린샷 디스크 저장: all(매 시도) / events(문제 상황만) / none
+  save_shots: events
 slots:
   target_count: 8
   positions:
@@ -70,7 +70,7 @@ buy_sequence:
 - wait: 0.4
 - wait_text:
     text: 취소
-    timeout: 3.0
+    timeout: 1.0
     region:
     - 330
     - 210
@@ -94,7 +94,7 @@ sell_sequence:
 - wait: 0.4
 - wait_text:
     text: 취소
-    timeout: 3.0
+    timeout: 1.0
     region:
     - 330
     - 210
@@ -106,33 +106,39 @@ sell_sequence:
 - wait: 0.5
 - wait_text:
     text: 정말로 판매
-    timeout: 3.0
-    required: true
+    timeout: 1.0
     region:
     - 330
     - 220
     - 630
     - 270
+    required: true
 - tap:
   - 440
   - 307
 - wait: 0.8
-attempt_sequence:
+# 슬롯 진입 시 1회 실행. '개조' 탭을 눌러 커서를 개조 상태로 만든다.
+# (판매 후 재구매 시에도 다시 실행됨)
+modify_enter_sequence:
 - tap:
   - 202
   - 128
 - wait: 0.8
+
+# 개조 1회. 커서가 이미 개조 상태라고 가정하고 아이템 클릭부터 시작.
+# 성공/실패와 무관하게 이 시퀀스만 반복한다.
+attempt_sequence:
 - tap_slot: true
 - wait: 0.5
 - wait_text:
     text: 대박개조
-    timeout: 3.0
-    required: true
+    timeout: 1.0
     region:
     - 300
     - 330
     - 660
     - 450
+    required: true
 - tap:
   - 377
   - 357

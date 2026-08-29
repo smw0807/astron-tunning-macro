@@ -241,6 +241,10 @@ class Macro:
         if level_now() >= self._target_level:
             return _DONE, None
 
+        # 진입: '개조' 탭 클릭 → 커서가 개조 상태로 유지됨 (판매 후 재진입 시도 여기서)
+        if not self._run_seq("개조 진입", cfg.get("modify_enter_sequence", []), slot_xy):
+            return _ABORT, UNKNOWN
+
         while True:
             if self._stop():
                 self.log("사용자 중단.")
@@ -267,6 +271,8 @@ class Macro:
                     return _ABORT, UNKNOWN
                 self.log(f"⚠ {e} → 개조 미실행, 재시도 ({dialog_fails}/5)")
                 self.adb.wait(1.0)
+                # 커서가 개조 상태를 잃었을 수 있으니 진입 시퀀스 재실행
+                self._run_seq("개조 재진입", cfg.get("modify_enter_sequence", []), slot_xy)
                 continue
             dialog_fails = 0
             self.adb.wait(timing.get("after_modify", 1.8))
