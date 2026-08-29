@@ -30,7 +30,16 @@ class Ocr:
             kwargs["rec_keys_path"] = o["rec_keys_path"]
         if o.get("rec_img_shape"):
             kwargs["rec_img_shape"] = list(o["rec_img_shape"])
-        self.engine = RapidOCR(**kwargs)
+        # CPU 전부 물고 늘어져서 PC 렉 걸리는 것 방지 (기본 2스레드)
+        nthreads = int(o.get("max_threads", 2))
+        for k in ("intra_op_num_threads", "inter_op_num_threads"):
+            kwargs[k] = nthreads
+        try:
+            self.engine = RapidOCR(**kwargs)
+        except TypeError:
+            for k in ("intra_op_num_threads", "inter_op_num_threads"):
+                kwargs.pop(k, None)
+            self.engine = RapidOCR(**kwargs)
 
     def read(self, img: np.ndarray, region: list | None = None) -> list[Line]:
         ox, oy = 0, 0

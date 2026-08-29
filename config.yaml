@@ -4,7 +4,7 @@
 
 adb:
   path: C:/Program Files/BlueStacks_nxt/HD-Adb.exe
-  serial: ''            # 비우면 instance_name 으로 자동 탐색 (블루스택 재시작 시 포트 변경 대응)
+  serial: 127.0.0.1:55873
   instance_name: 개조
   bluestacks_conf: C:/ProgramData/BlueStacks_nxt/bluestacks.conf
   package: com.ctugames.astron
@@ -15,13 +15,15 @@ ocr:
   - 3
   - 32
   - 320
+  max_threads: 2       # OCR 이 CPU 다 물어서 PC 렉 걸리는 것 방지
 timing:
   after_tap: 0.6
   after_modify: 2.2
   after_confirm: 1.2
   loop_idle: 0.4
+  poll_interval: 0.5   # wait_text 가 화면 다시 캡처하는 간격
 safety:
-  max_attempts: 500
+  max_attempts: 10000
   min_gold: 0
   gold_region:
   - 515
@@ -117,16 +119,11 @@ sell_sequence:
   - 440
   - 307
 - wait: 0.8
-# 슬롯 진입 시 1회 실행. '개조' 탭을 눌러 커서를 개조 상태로 만든다.
-# (판매 후 재구매 시에도 다시 실행됨)
 modify_enter_sequence:
 - tap:
   - 202
   - 128
 - wait: 0.8
-
-# 개조 1회. 커서가 이미 개조 상태라고 가정하고 아이템 클릭부터 시작.
-# 성공/실패와 무관하게 이 시퀀스만 반복한다.
 attempt_sequence:
 - tap_slot: true
 - wait: 0.5
@@ -143,13 +140,6 @@ attempt_sequence:
   - 377
   - 357
 - wait: 1.0
-- tap_if_text:
-    text: 예
-    region:
-    - 380
-    - 260
-    - 580
-    - 320
 result:
   region:
   - 144
@@ -166,21 +156,8 @@ result:
   - 개조할 수 없
   - 더 이상 개조
   - 개조가 불가
+  # 개조 후 확인 팝업이 없음. NPC 말풍선만 바뀜 → 잠깐 대기만 (헛 캡처 제거)
   success_sequence:
-  - tap_if_text:
-      text: 확인
-      region:
-      - 380
-      - 300
-      - 580
-      - 360
-  - wait: 0.6
+  - wait: 0.5
   fail_sequence:
-  - tap_if_text:
-      text: 확인
-      region:
-      - 380
-      - 300
-      - 580
-      - 360
-  - wait: 0.6
+  - wait: 0.5

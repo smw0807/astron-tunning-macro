@@ -228,7 +228,8 @@ class Macro:
         consec = 0
         succ = 0
         dialog_fails = 0
-        cur_level: int | None = self._read_level(self.adb.screencap())
+        # 레벨 영역이 설정된 경우에만 캡처해서 현재 레벨을 읽는다
+        cur_level: int | None = self._read_level(self.adb.screencap()) if self._level_region else None
         base = cur_level if cur_level is not None else self._start_level
 
         def level_now() -> int:
@@ -255,9 +256,6 @@ class Macro:
                 return _ABORT, MAX_REACHED
             self._progress(self._attempt, self._max, st())
             self.log(f"--- 시도 {self._attempt}  ({st()}) ---")
-
-            if not self._gold_ok():
-                return _ABORT, LOW_GOLD
 
             try:
                 run_steps(self.adb, self.ocr, cfg["attempt_sequence"],

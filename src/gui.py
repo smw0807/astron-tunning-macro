@@ -529,7 +529,8 @@ class App(tk.Tk):
         self.timing_vars = {}
         tg = ttk.Frame(f)
         tg.pack(anchor="w")
-        defs = [("after_tap", 0.6), ("after_modify", 1.8), ("after_confirm", 1.2), ("loop_idle", 0.4)]
+        defs = [("after_tap", 0.6), ("after_modify", 1.8), ("after_confirm", 1.2),
+                ("loop_idle", 0.4), ("poll_interval", 0.5)]
         for i, (k, dv) in enumerate(defs):
             ttk.Label(tg, text=k).grid(row=i, column=0, sticky="w", pady=2, padx=(0, 8))
             v = tk.StringVar(value=str(t.get(k, dv)))

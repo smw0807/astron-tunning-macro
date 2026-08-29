@@ -79,15 +79,18 @@ def run_steps(adb: Adb, ocr: Ocr, steps: list[dict], timing: dict,
         elif "wait_text" in step:
             d = step["wait_text"]
             timeout = float(d.get("timeout", 3.0))
+            interval = float(d.get("interval", timing.get("poll_interval", 0.5)))
             deadline = time.time() + timeout
             found = False
-            while time.time() < deadline:
+            while True:
                 if stop():
                     return
                 if ocr.find(adb.screencap(), d["text"], d.get("region")):
                     found = True
                     break
-                adb.wait(0.4)
+                if time.time() >= deadline:
+                    break
+                adb.wait(interval)
             if not found:
                 if d.get("required"):
                     raise SequenceError(f"wait_text: '{d['text']}' {timeout}s 안에 안 나타남")
