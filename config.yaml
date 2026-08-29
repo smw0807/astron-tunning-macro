@@ -85,13 +85,13 @@ buy_fail_keywords:
 - 가방이 가득
 - 인벤토리가 가득
 sell_sequence:
-- tap:            # 1. 왼쪽 상단 '판매' 버튼 (TODO: GUI 로 좌표 확인)
-  - 127
-  - 126
+- tap:
+  - 129
+  - 125
 - wait: 0.5
-- tap_slot: true  # 2. 3회 실패한 슬롯 아이템 클릭
+- tap_slot: true
 - wait: 0.4
-- wait_text:      # 3. 판매/취소 다이얼로그 출력 확인
+- wait_text:
     text: 취소
     timeout: 3.0
     region:
@@ -99,20 +99,28 @@ sell_sequence:
     - 210
     - 630
     - 360
-- tap:            # 4. 다이얼로그의 '판매' 버튼 (TODO: GUI 로 좌표 지정)
-  - 0
-  - 0
+- tap:
+  - 472
+  - 238
 - wait: 0.6
 attempt_sequence:
-- tap:
+- tap:            # '개조' 탭
   - 202
   - 128
 - wait: 0.8
-- tap_slot: true
+- tap_slot: true  # 슬롯 아이템 클릭 → 개조 다이얼로그
 - wait: 0.5
-- tap:
-  - 0
-  - 0
+- wait_text:      # 개조 다이얼로그 활성화 확인 ('대박개조' 는 이 다이얼로그에만)
+    text: 대박개조
+    timeout: 3.0
+    region:
+    - 300
+    - 330
+    - 660
+    - 450
+- tap:            # 4개 버튼 중 [개조]
+  - 377
+  - 357
 - wait: 1.0
 - tap_if_text:
     text: 예
