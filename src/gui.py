@@ -561,12 +561,20 @@ class App(tk.Tk):
         ttk.Button(top, text="전체 시작", command=self.start_all).pack(side="left", padx=(12, 2))
         ttk.Button(top, text="전체 정지", command=self.stop_all).pack(side="left")
 
-        ins = ttk.Frame(f)
+        ins = ttk.LabelFrame(f, text="인스턴스", padding=6)
         ins.pack(fill="x", pady=(6, 2))
-        ttk.Label(ins, text="인스턴스 (쉼표 구분)").pack(side="left")
+        row = ttk.Frame(ins)
+        row.pack(fill="x")
+        ttk.Button(row, text="🔍 인스턴스 조회", command=self._scan_instances).pack(side="left")
+        self.v_scanmsg = tk.StringVar(value="조회를 누르면 BlueStacks 인스턴스 목록을 불러옵니다.")
+        ttk.Label(row, textvariable=self.v_scanmsg, foreground="#777").pack(side="left", padx=8)
+        ttk.Button(row, text="선택 적용", command=self._apply_checked_instances).pack(side="right")
+
+        self.inst_box = ttk.Frame(ins)
+        self.inst_box.pack(fill="x", pady=(4, 0))
+        self.inst_checks: dict[str, tk.BooleanVar] = {}
+        self._inst_serials: dict[str, str] = {}
         self.v_instances = tk.StringVar(value=", ".join(self._instance_names()))
-        ttk.Entry(ins, textvariable=self.v_instances, width=44).pack(side="left", padx=4)
-        ttk.Button(ins, text="적용", command=self._rebuild_runners).pack(side="left")
 
         self.run_nb = ttk.Notebook(f)
         self.run_nb.pack(fill="both", expand=True, pady=4)
@@ -578,6 +586,55 @@ class App(tk.Tk):
         ttk.Label(f, textvariable=self.v_stattotal, foreground="#777").pack(anchor="w")
 
     # ---- 멀티 인스턴스 실행 ------------------------------------------
+    def _scan_instances(self):
+        conf = self.cfg.get("adb", {}).get("bluestacks_conf", "")
+        exe = self.v_adb.get().strip() or self.cfg.get("adb", {}).get("path", "")
+        self.v_scanmsg.set("조회 중...")
+        self.update_idletasks()
+
+        def work():
+            try:
+                from .adb import list_instances
+                items = list_instances(exe, conf, probe=True)
+                self.q.put(("insts", None, items))
+            except Exception as e:
+                self.q.put(("insts", None, e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _populate_instances(self, items):
+        for w in self.inst_box.winfo_children():
+            w.destroy()
+        self.inst_checks = {}
+        self._inst_serials = {}
+        if isinstance(items, Exception):
+            self.v_scanmsg.set(f"조회 실패: {items}")
+            return
+        running = [str(x) for x in self.cfg.get("instances", [])]
+        on = sum(1 for it in items if it["online"])
+        self.v_scanmsg.set(f"{len(items)}개 (온라인 {on}) — 실행할 인스턴스를 체크하세요")
+        for i, it in enumerate(items):
+            name = it["name"]
+            self._inst_serials[name] = it["serial"] or ""
+            checked = it["online"] and (not running or name in running)
+            v = tk.BooleanVar(value=checked)
+            self.inst_checks[name] = v
+            mark = "●" if it["online"] else "○"
+            color = "#3a3" if it["online"] else "#999"
+            fr = ttk.Frame(self.inst_box)
+            fr.grid(row=i // 3, column=i % 3, sticky="w", padx=6, pady=1)
+            ttk.Checkbutton(fr, text=f"{name}", variable=v).pack(side="left")
+            tk.Label(fr, text=f"{mark} {it['serial'] or '-'}", fg=color).pack(side="left")
+
+    def _apply_checked_instances(self):
+        if self.inst_checks:
+            names = [n for n, v in self.inst_checks.items() if v.get()]
+            if not names:
+                messagebox.showinfo("안내", "체크된 인스턴스가 없습니다.", parent=self)
+                return
+            self.v_instances.set(", ".join(names))
+        self._rebuild_runners()
+
     def _instance_names(self) -> list[str]:
         ins = self.cfg.get("instances")
         if ins:
@@ -631,7 +688,7 @@ class App(tk.Tk):
         cfg = copy.deepcopy(self.cfg)
         cfg.setdefault("adb", {})
         cfg["adb"]["instance_name"] = name
-        cfg["adb"]["serial"] = ""
+        cfg["adb"]["serial"] = self._inst_serials.get(name, "")
         dry = self.v_dry.get()
         mx = int(self.v_runmax.get()) if self.v_runmax.get().strip() else None
         st["stop_event"].clear()
@@ -781,7 +838,7 @@ class App(tk.Tk):
         cfg = copy.deepcopy(self.cfg)
         if viewed and viewed != "default":
             cfg["adb"]["instance_name"] = viewed
-            cfg["adb"]["serial"] = ""
+            cfg["adb"]["serial"] = self._inst_serials.get(viewed, "")
         try:
             self.adb = Adb(cfg)
             self.adb.connect()
@@ -996,6 +1053,8 @@ class App(tk.Tk):
                 elif kind == "ocr":
                     self.ocr_out.delete("1.0", "end")
                     self.ocr_out.insert("end", payload)
+                elif kind == "insts":
+                    self._populate_instances(payload)
                 elif kind == "stat":
                     self._stat_dirty = True
                 elif kind == "done":

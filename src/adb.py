@@ -10,6 +10,44 @@ import numpy as np
 import cv2
 
 
+def list_online_serials(exe: str) -> list[str]:
+    r = subprocess.run([exe, "devices"], capture_output=True, timeout=15)
+    out = (r.stdout or b"").decode("utf-8", errors="replace")
+    found = []
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == "device":
+            found.append(parts[0])
+    return found
+
+
+def list_instances(exe: str, conf_path: str, probe: bool = True) -> list[dict]:
+    """bluestacks.conf 의 모든 인스턴스: [{key, name, serial, online}].
+
+    probe=True 면 각 인스턴스에 adb connect 시도해서 online 여부 확인.
+    """
+    text = Path(conf_path).read_text(encoding="utf-8", errors="ignore")
+    names = dict(re.findall(r'bst\.instance\.(\w+)\.display_name="([^"]*)"', text))
+    ports = dict(re.findall(r'bst\.instance\.(\w+)\.status\.adb_port="(\d+)"', text))
+    online = set(list_online_serials(exe))
+    out = []
+    for key, name in sorted(names.items()):
+        port = ports.get(key)
+        serial = f"127.0.0.1:{port}" if port else None
+        is_on = serial in online if serial else False
+        if probe and serial and not is_on:
+            try:
+                subprocess.run([exe, "connect", serial], capture_output=True, timeout=5)
+            except Exception:
+                pass
+        out.append({"key": key, "name": name or key, "serial": serial, "online": is_on})
+    if probe:
+        online = set(list_online_serials(exe))
+        for it in out:
+            it["online"] = bool(it["serial"]) and it["serial"] in online
+    return out
+
+
 class Adb:
     def __init__(self, cfg: dict):
         a = cfg["adb"]
@@ -38,13 +76,7 @@ class Adb:
         return f"127.0.0.1:{m2.group(1)}"
 
     def _list_online(self) -> list[str]:
-        out = self._run(["devices"], device=False)
-        found = []
-        for line in out.splitlines()[1:]:
-            parts = line.split()
-            if len(parts) == 2 and parts[1] == "device":
-                found.append(parts[0])
-        return found
+        return list_online_serials(self.exe)
 
     def _only_local_device(self) -> str | None:
         """이미 붙어있는 127.0.0.1 기기가 하나뿐이면 그걸 쓴다."""
