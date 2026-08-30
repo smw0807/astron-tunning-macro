@@ -42,13 +42,27 @@ BlueStacks 인스턴스에 ADB로 접속해서 `com.ctugames.astron` 의 아이�
 7. `OCR 테스트` 탭으로 각 영역이 문구/레벨을 읽는지 확인
 8. `설정 저장` → `실행` 탭에서 **DRY-RUN** 점검 후 **시작**
 
+## 멀티 인스턴스
+
+`실행` 탭 상단 "인스턴스 (쉼표 구분)"에 BlueStacks 인스턴스 이름을 여러 개 넣고 `적용`.
+인스턴스별 서브탭(상태·로그·시작/정지)이 생기고 `전체 시작`으로 **병렬 개조**.
+좌표/시퀀스/목표는 모든 인스턴스가 공유(같은 게임·해상도), ADB 대상만 다름.
+`config.yaml` › `instances:` 목록에 저장됨.
+
+## 통계
+
+`통계` 탭 — 레벨별(개조 전 레벨 기준) 시도/성공/실패/성공률과 **3연속 실패 막힘 횟수**.
+SQLite(`stats.db`)에 **전체 누적**되며 인스턴스 태그도 저장. `초기화` 로 리셋.
+CLI 실행도 자동 기록(`--no-stats` 로 끔), DRY-RUN 은 미기록.
+
 ## 구성
 
 | 파일 | 역할 |
 |---|---|
 | `config.yaml` | 전체 설정 (GUI 저장 시 재생성) |
-| `src/gui.py` | 설정 GUI + 매크로 실행/로그/OCR 테스트 |
+| `src/gui.py` | 설정 GUI + 멀티 인스턴스 실행/로그/통계/OCR 테스트 |
 | `src/macro.py` | 슬롯 순회 + 개조 루프 (`Macro` 클래스, CLI 겸용) |
+| `src/stats.py` | 개조 통계 SQLite 누적 |
 | `src/adb.py` | HD-Adb.exe 래퍼 (connect / tap / swipe / screencap) |
 | `src/ocr.py` | RapidOCR(한글) 래퍼 + 키워드 검색 |
 | `src/runner.py` | config 로드/저장 + 시퀀스 실행기 (`tap_slot` 처리) |

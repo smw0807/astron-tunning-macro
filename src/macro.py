@@ -382,11 +382,17 @@ def main() -> int:
     ap.add_argument("--max", type=int, default=None, help="최대 시도 횟수 (config 값 override)")
     ap.add_argument("--dry-run", action="store_true", help="입력 없이 판정 흐름만 확인")
     ap.add_argument("--no-stats", action="store_true", help="통계 DB 기록 안 함")
+    ap.add_argument("--instance", default=None, help="대상 BlueStacks 인스턴스 이름 (adb.instance_name override)")
     args = ap.parse_args()
+
+    cfg = load_config(args.config)
+    if args.instance:
+        cfg.setdefault("adb", {})["instance_name"] = args.instance
+        cfg["adb"]["serial"] = ""
 
     from .stats import Stats
     st = None if (args.no_stats or args.dry_run) else Stats()
-    m = Macro(load_config(args.config), dry_run=args.dry_run, stats=st)
+    m = Macro(cfg, dry_run=args.dry_run, stats=st)
     try:
         return m.run(args.max)
     finally:

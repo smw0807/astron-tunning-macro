@@ -8,6 +8,9 @@ adb:
   instance_name: 개조
   bluestacks_conf: C:/ProgramData/BlueStacks_nxt/bluestacks.conf
   package: com.ctugames.astron
+# 병렬로 돌릴 BlueStacks 인스턴스 이름 목록 (display_name). 비우면 adb.instance_name 하나.
+instances:
+- 개조
 ocr:
   rec_model_path: models/korean_rec.onnx
   rec_keys_path: models/korean_dict.txt

@@ -558,19 +558,122 @@ class App(tk.Tk):
         ttk.Label(top, text="  최대 횟수 override").pack(side="left")
         self.v_runmax = tk.StringVar(value="")
         ttk.Entry(top, textvariable=self.v_runmax, width=6).pack(side="left", padx=3)
-        self.btn_start = ttk.Button(top, text="시작", command=self.start_macro)
-        self.btn_start.pack(side="left", padx=6)
-        self.btn_stop = ttk.Button(top, text="정지", command=self.stop_macro, state="disabled")
-        self.btn_stop.pack(side="left")
+        ttk.Button(top, text="전체 시작", command=self.start_all).pack(side="left", padx=(12, 2))
+        ttk.Button(top, text="전체 정지", command=self.stop_all).pack(side="left")
 
-        self.v_prog = tk.StringVar(value="대기 중")
-        ttk.Label(f, textvariable=self.v_prog, font=("", 11, "bold")).pack(anchor="w", pady=6)
+        ins = ttk.Frame(f)
+        ins.pack(fill="x", pady=(6, 2))
+        ttk.Label(ins, text="인스턴스 (쉼표 구분)").pack(side="left")
+        self.v_instances = tk.StringVar(value=", ".join(self._instance_names()))
+        ttk.Entry(ins, textvariable=self.v_instances, width=44).pack(side="left", padx=4)
+        ttk.Button(ins, text="적용", command=self._rebuild_runners).pack(side="left")
+
+        self.run_nb = ttk.Notebook(f)
+        self.run_nb.pack(fill="both", expand=True, pady=4)
+        self.run_nb.bind("<<NotebookTabChanged>>", lambda e: None)
+        self.runners: dict[str, dict] = {}
+        self._rebuild_runners()
+
         self.v_stattotal = tk.StringVar(value="")
         ttk.Label(f, textvariable=self.v_stattotal, foreground="#777").pack(anchor="w")
 
-        self.log = tk.Text(f, height=16, bg="#111", fg="#ddd", insertbackground="#ddd")
-        self.log.pack(fill="both", expand=True)
-        self.log.config(state="disabled")
+    # ---- 멀티 인스턴스 실행 ------------------------------------------
+    def _instance_names(self) -> list[str]:
+        ins = self.cfg.get("instances")
+        if ins:
+            return [str(x).strip() for x in ins if str(x).strip()]
+        a = self.cfg.get("adb", {})
+        return [a.get("instance_name") or a.get("serial") or "default"]
+
+    def _current_run_name(self):
+        try:
+            return self.run_nb.tab(self.run_nb.select(), "text")
+        except Exception:
+            return None
+
+    def _rebuild_runners(self):
+        for st in self.runners.values():
+            st["stop_event"].set()
+        for t in list(self.run_nb.tabs()):
+            self.run_nb.forget(t)
+        self.runners = {}
+        names = [x.strip() for x in self.v_instances.get().replace("\n", ",").split(",") if x.strip()]
+        if not names:
+            names = ["default"]
+        self.cfg["instances"] = names
+        for name in names:
+            fr = ttk.Frame(self.run_nb, padding=6)
+            self.run_nb.add(fr, text=name)
+            bar = ttk.Frame(fr)
+            bar.pack(fill="x")
+            sv = tk.StringVar(value="대기 중")
+            ttk.Label(bar, textvariable=sv, font=("", 10, "bold")).pack(side="left")
+            b2 = ttk.Button(bar, text="정지", state="disabled",
+                            command=lambda n=name: self.stop_instance(n))
+            b2.pack(side="right")
+            b1 = ttk.Button(bar, text="시작", command=lambda n=name: self.start_instance(n))
+            b1.pack(side="right", padx=4)
+            lg = tk.Text(fr, height=13, bg="#111", fg="#ddd", insertbackground="#ddd")
+            lg.pack(fill="both", expand=True, pady=4)
+            lg.config(state="disabled")
+            self.runners[name] = dict(status=sv, log=lg, start=b1, stop=b2,
+                                      stop_event=threading.Event(), thread=None)
+
+    def start_instance(self, name: str):
+        st = self.runners.get(name)
+        if not st or (st["thread"] and st["thread"].is_alive()):
+            return
+        try:
+            self._collect()
+        except Exception as e:
+            messagebox.showerror("설정 오류", str(e))
+            return
+        cfg = copy.deepcopy(self.cfg)
+        cfg.setdefault("adb", {})
+        cfg["adb"]["instance_name"] = name
+        cfg["adb"]["serial"] = ""
+        dry = self.v_dry.get()
+        mx = int(self.v_runmax.get()) if self.v_runmax.get().strip() else None
+        st["stop_event"].clear()
+        st["start"].config(state="disabled")
+        st["stop"].config(state="normal")
+        self._log_line("=" * 30, name)
+
+        def work():
+            try:
+                m = Macro(
+                    cfg, dry_run=dry,
+                    on_log=lambda s: self.q.put(("log", name, s)),
+                    should_stop=st["stop_event"].is_set,
+                    on_progress=lambda a, b, c: self.q.put(("prog", name, f"{c}  {a}/{b}")),
+                    on_shot=lambda img, tag: self.q.put(("img", name, img)),
+                    stats=None if dry else self.stats,
+                    instance_label=name,
+                    on_stat=lambda: self.q.put(("stat", None, None)),
+                )
+                code = m.run(mx)
+                self.q.put(("log", name, f"종료 코드 {code}"))
+            except Exception as e:
+                self.q.put(("log", name, f"오류: {e}"))
+            finally:
+                self.q.put(("done", name, None))
+
+        st["thread"] = threading.Thread(target=work, daemon=True)
+        st["thread"].start()
+
+    def stop_instance(self, name: str):
+        st = self.runners.get(name)
+        if st:
+            st["stop_event"].set()
+            self._log_line("정지 요청됨...", name)
+
+    def start_all(self):
+        for n in list(self.runners):
+            self.start_instance(n)
+
+    def stop_all(self):
+        for n in list(self.runners):
+            self.stop_instance(n)
 
     # ---- 탭: 통계 -------------------------------------------------
     def _tab_stats(self, nb):
@@ -673,11 +776,17 @@ class App(tk.Tk):
 
     def connect_refresh(self):
         self._sync_adb_cfg()
+        # 실행 탭에서 인스턴스를 골라놨으면 그 인스턴스 화면을 본다 (캘리브레이션/미리보기)
+        viewed = self._current_run_name()
+        cfg = copy.deepcopy(self.cfg)
+        if viewed and viewed != "default":
+            cfg["adb"]["instance_name"] = viewed
+            cfg["adb"]["serial"] = ""
         try:
-            self.adb = Adb(self.cfg)
+            self.adb = Adb(cfg)
             self.adb.connect()
-            self.v_serial.set(self.adb.serial)
-            self.v_status.set(f"연결됨 {self.adb.serial}")
+            self.v_status.set(f"연결됨 {self.adb.serial}"
+                              + (f" ({viewed})" if viewed and viewed != 'default' else ""))
             self._grab_async()
         except Exception as e:
             self.v_status.set("연결 실패")
@@ -691,9 +800,9 @@ class App(tk.Tk):
     def _grab_worker(self):
         try:
             img = self.adb.screencap()
-            self.q.put(("img", img))
+            self.q.put(("img", None, img))
         except Exception as e:
-            self.q.put(("log", f"스크린샷 실패: {e}"))
+            self.q.put(("log", None, f"스크린샷 실패: {e}"))
 
     def _show_img(self, bgr):
         self._img_bgr = bgr
@@ -837,6 +946,10 @@ class App(tk.Tk):
         sl["positions"] = [_parse_list(v.get())[:2] or [0, 0] for v in self.v_slotpos]
         self.cfg["buy_fail_keywords"] = lines(self.t_buyfail)
 
+        if hasattr(self, "v_instances"):
+            names = [x.strip() for x in self.v_instances.get().replace("\n", ",").split(",") if x.strip()]
+            self.cfg["instances"] = names or self._instance_names()
+
         s = self.cfg.setdefault("safety", {})
         s["max_attempts"] = int(self.v_max.get())
         s["min_gold"] = int(self.v_mingold.get())
@@ -861,68 +974,36 @@ class App(tk.Tk):
         self.cfg = load_config()
         messagebox.showinfo("다시 불러오기", "config.yaml 을 다시 불러왔습니다. 창을 다시 열면 반영됩니다.")
 
-    # ---- 매크로 실행 -------------------------------------------
-    def start_macro(self):
-        if self.macro_thread and self.macro_thread.is_alive():
-            return
-        try:
-            self._collect()
-        except Exception as e:
-            messagebox.showerror("설정 오류", str(e))
-            return
-        cfg = copy.deepcopy(self.cfg)
-        dry = self.v_dry.get()
-        mx = int(self.v_runmax.get()) if self.v_runmax.get().strip() else None
-        self.stop_event.clear()
-        self.btn_start.config(state="disabled")
-        self.btn_stop.config(state="normal")
-        self._log_line("=" * 40)
-
-        def work():
-            try:
-                m = Macro(
-                    cfg, dry_run=dry,
-                    on_log=lambda s: self.q.put(("log", s)),
-                    should_stop=self.stop_event.is_set,
-                    on_progress=lambda a, b, c: self.q.put(("prog", f"{c}  {a}/{b}")),
-                    on_shot=lambda img, tag: self.q.put(("img", img)),
-                    stats=None if dry else self.stats,
-                    on_stat=lambda: self.q.put(("stat", None)),
-                )
-                code = m.run(mx)
-                self.q.put(("log", f"종료 코드 {code}"))
-            except Exception as e:
-                self.q.put(("log", f"오류: {e}"))
-            finally:
-                self.q.put(("done", None))
-
-        self.macro_thread = threading.Thread(target=work, daemon=True)
-        self.macro_thread.start()
-
-    def stop_macro(self):
-        self.stop_event.set()
-        self._log_line("정지 요청됨...")
-
     # ---- 큐 펌프 ----------------------------------------------
     def _pump(self):
         try:
             while True:
-                kind, payload = self.q.get_nowait()
+                msg = self.q.get_nowait()
+                kind = msg[0]
+                if len(msg) == 3:
+                    _, who, payload = msg
+                else:
+                    who, payload = None, (msg[1] if len(msg) > 1 else None)
                 if kind == "log":
-                    self._log_line(payload)
+                    self._log_line(payload, who)
                 elif kind == "img":
-                    self._show_img(payload)
+                    if who is None or who == self._current_run_name():
+                        self._show_img(payload)
                 elif kind == "prog":
-                    self.v_prog.set(payload)
+                    st = self.runners.get(who)
+                    if st:
+                        st["status"].set(payload)
                 elif kind == "ocr":
                     self.ocr_out.delete("1.0", "end")
                     self.ocr_out.insert("end", payload)
                 elif kind == "stat":
                     self._stat_dirty = True
                 elif kind == "done":
-                    self.btn_start.config(state="normal")
-                    self.btn_stop.config(state="disabled")
-                    self.v_prog.set("대기 중")
+                    st = self.runners.get(who)
+                    if st:
+                        st["start"].config(state="normal")
+                        st["stop"].config(state="disabled")
+                        st["status"].set("대기 중")
                     self._stat_dirty = True
         except queue.Empty:
             pass
@@ -931,11 +1012,19 @@ class App(tk.Tk):
             self._refresh_stats()
         self.after(100, self._pump)
 
-    def _log_line(self, s: str):
-        self.log.config(state="normal")
-        self.log.insert("end", s + "\n")
-        self.log.see("end")
-        self.log.config(state="disabled")
+    def _log_line(self, s: str, who: str | None = None):
+        w = None
+        if who and who in self.runners:
+            w = self.runners[who]["log"]
+        elif self.runners:
+            w = self.runners.get(self._current_run_name(), {}).get("log")
+        if w is None:
+            print(s, flush=True)
+            return
+        w.config(state="normal")
+        w.insert("end", s + "\n")
+        w.see("end")
+        w.config(state="disabled")
 
 
 def _parse_list(s: str) -> list[int]:
