@@ -21,6 +21,7 @@ from .adb import Adb
 from .macro import Macro
 from .ocr import Ocr
 from .runner import config_path, load_config, save_config
+from .stats import Stats
 
 CAP_W, CAP_H = 960, 540
 DISP_W = 720  # 캔버스 표시 폭
@@ -279,8 +280,10 @@ class App(tk.Tk):
         self.macro_thread: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.q: queue.Queue = queue.Queue()
+        self.stats = Stats()
 
         self._build()
+        self._refresh_stats()
         self.after(100, self._pump)
 
     # ---- 레이아웃 ---------------------------------------------------------
@@ -338,6 +341,7 @@ class App(tk.Tk):
         self._tab_modify(nb)
         self._tab_safety(nb)
         self._tab_run(nb)
+        self._tab_stats(nb)
         self._tab_ocr(nb)
 
         foot = ttk.Frame(self, padding=6)
@@ -561,10 +565,88 @@ class App(tk.Tk):
 
         self.v_prog = tk.StringVar(value="대기 중")
         ttk.Label(f, textvariable=self.v_prog, font=("", 11, "bold")).pack(anchor="w", pady=6)
+        self.v_stattotal = tk.StringVar(value="")
+        ttk.Label(f, textvariable=self.v_stattotal, foreground="#777").pack(anchor="w")
 
-        self.log = tk.Text(f, height=18, bg="#111", fg="#ddd", insertbackground="#ddd")
+        self.log = tk.Text(f, height=16, bg="#111", fg="#ddd", insertbackground="#ddd")
         self.log.pack(fill="both", expand=True)
         self.log.config(state="disabled")
+
+    # ---- 탭: 통계 -------------------------------------------------
+    def _tab_stats(self, nb):
+        f = ttk.Frame(nb, padding=8)
+        nb.add(f, text="통계")
+
+        top = ttk.Frame(f)
+        top.pack(fill="x")
+        ttk.Label(top, text="레벨별 개조 통계 (from_level 기준, 전체 누적)",
+                  font=("", 10, "bold")).pack(side="left")
+        ttk.Button(top, text="새로고침", command=self._refresh_stats).pack(side="right")
+        ttk.Button(top, text="초기화", command=self._reset_stats).pack(side="right", padx=4)
+
+        cols = ("level", "attempts", "success", "fail", "unknown", "rate", "bricks")
+        heads = ("레벨", "시도", "성공", "실패", "미인식", "성공률", "막힘(3연속실패)")
+        self.stat_tree = ttk.Treeview(f, columns=cols, show="headings", height=9)
+        for c, h in zip(cols, heads):
+            self.stat_tree.heading(c, text=h)
+            self.stat_tree.column(c, width=90 if c in ("level", "rate", "bricks") else 70,
+                                  anchor="center")
+        self.stat_tree.column("bricks", width=120)
+        self.stat_tree.pack(fill="x", pady=6)
+        self.stat_tree.tag_configure("brick", background="#5a1e1e", foreground="#fff")
+
+        ttk.Label(f, text="레벨별 막힘 횟수", font=("", 9, "bold")).pack(anchor="w", pady=(8, 2))
+        self.brick_canvas = tk.Canvas(f, height=140, bg="#1a1a1a", highlightthickness=0)
+        self.brick_canvas.pack(fill="x")
+        self.v_statfoot = tk.StringVar(value="")
+        ttk.Label(f, textvariable=self.v_statfoot, foreground="#777").pack(anchor="w", pady=4)
+
+    def _refresh_stats(self):
+        if not hasattr(self, "stat_tree"):
+            return
+        max_lv = int(self.cfg.get("modify", {}).get("target_level", 8))
+        summ = self.stats.summary(max_level=max(max_lv, 8))
+        self.stat_tree.delete(*self.stat_tree.get_children())
+        for lv, r in summ.items():
+            rate = f"{r['rate']*100:.1f}%" if (r["success"] + r["fail"]) else "-"
+            tag = ("brick",) if r["bricks"] else ()
+            self.stat_tree.insert("", "end", tags=tag, values=(
+                f"Lv.{lv}→{lv+1}", r["attempts"], r["success"], r["fail"],
+                r["unknown"], rate, r["bricks"]))
+        self._draw_brick_chart(summ)
+        t = self.stats.totals()
+        msg = (f"전체: 시도 {t['attempts']} · 성공 {t['success']} "
+               f"({t['rate']*100:.1f}%) · 막힘 {t['bricks']}")
+        self.v_statfoot.set(msg)
+        if hasattr(self, "v_stattotal"):
+            self.v_stattotal.set("📊 " + msg)
+
+    def _draw_brick_chart(self, summ: dict):
+        c = self.brick_canvas
+        c.delete("all")
+        c.update_idletasks()
+        w = c.winfo_width() or 600
+        h = 140
+        levels = list(summ.keys())
+        if not levels:
+            return
+        maxb = max((summ[l]["bricks"] for l in levels), default=0) or 1
+        n = len(levels)
+        bw = w / n
+        for i, lv in enumerate(levels):
+            b = summ[lv]["bricks"]
+            bh = (b / maxb) * (h - 30)
+            x0 = i * bw + bw * 0.2
+            x1 = i * bw + bw * 0.8
+            c.create_rectangle(x0, h - 20 - bh, x1, h - 20, fill="#c0453e", outline="")
+            c.create_text((x0 + x1) / 2, h - 10, text=f"Lv.{lv}", fill="#aaa", font=("", 8))
+            if b:
+                c.create_text((x0 + x1) / 2, h - 26 - bh, text=str(b), fill="#fff", font=("", 8))
+
+    def _reset_stats(self):
+        if messagebox.askyesno("초기화", "통계 DB를 모두 지웁니다. 계속?", parent=self):
+            self.stats.reset()
+            self._refresh_stats()
 
     # ---- 탭: OCR 테스트 ---------------------------------------------
     def _tab_ocr(self, nb):
@@ -804,6 +886,8 @@ class App(tk.Tk):
                     should_stop=self.stop_event.is_set,
                     on_progress=lambda a, b, c: self.q.put(("prog", f"{c}  {a}/{b}")),
                     on_shot=lambda img, tag: self.q.put(("img", img)),
+                    stats=None if dry else self.stats,
+                    on_stat=lambda: self.q.put(("stat", None)),
                 )
                 code = m.run(mx)
                 self.q.put(("log", f"종료 코드 {code}"))
@@ -833,12 +917,18 @@ class App(tk.Tk):
                 elif kind == "ocr":
                     self.ocr_out.delete("1.0", "end")
                     self.ocr_out.insert("end", payload)
+                elif kind == "stat":
+                    self._stat_dirty = True
                 elif kind == "done":
                     self.btn_start.config(state="normal")
                     self.btn_stop.config(state="disabled")
                     self.v_prog.set("대기 중")
+                    self._stat_dirty = True
         except queue.Empty:
             pass
+        if getattr(self, "_stat_dirty", False):
+            self._stat_dirty = False
+            self._refresh_stats()
         self.after(100, self._pump)
 
     def _log_line(self, s: str):

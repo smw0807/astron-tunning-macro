@@ -75,6 +75,9 @@ class Macro:
         should_stop: Callable[[], bool] | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
         on_shot: Callable[[object, str], None] | None = None,
+        stats=None,
+        instance_label: str | None = None,
+        on_stat: Callable[[], None] | None = None,
     ):
         self.cfg = cfg
         self.dry_run = dry_run
@@ -82,6 +85,9 @@ class Macro:
         self._stop = should_stop or (lambda: False)
         self._progress = on_progress or (lambda a, b, c: None)
         self._on_shot = on_shot
+        self._stats = stats
+        self._instance_label = instance_label or cfg.get("adb", {}).get("instance_name") or "default"
+        self._on_stat = on_stat or (lambda: None)
         self.adb: Adb | None = None
         self.ocr: Ocr | None = None
 
@@ -256,6 +262,7 @@ class Macro:
                 return _ABORT, MAX_REACHED
             self._progress(self._attempt, self._max, st())
             self.log(f"--- 시도 {self._attempt}  ({st()}) ---")
+            from_level = level_now()
 
             try:
                 run_steps(self.adb, self.ocr, cfg["attempt_sequence"],
@@ -308,6 +315,7 @@ class Macro:
                 lv = self._read_level(img)
                 cur_level = lv if lv is not None else (cur_level + 1 if cur_level is not None else None)
                 self.log(f"✅ 성공 ('{ln.text}')  Lv.{level_now()}")
+                self._record("success", slot_no, from_level)
                 run_steps(self.adb, self.ocr, self._succ_seq, timing, self._stop, log=self.log)
                 if level_now() >= self._target_level:
                     self.log(f"목표 레벨 Lv.{self._target_level} 도달.")
@@ -319,13 +327,17 @@ class Macro:
                 _, ln = fail
                 consec += 1
                 self.log(f"❌ 실패 ('{ln.text}')  연속 {consec}/{self._fail_limit}")
+                self._record("fail", slot_no, from_level)
                 run_steps(self.adb, self.ocr, self._fail_seq, timing, self._stop, log=self.log)
 
             if locked or (fail and consec >= self._fail_limit):
                 why = "개조 불가 감지" if locked else f"연속 {self._fail_limit}회 실패"
                 if self._save_shots != "none":
                     self._write_shot(img, path)
-                self.log(f"🔧 {why} → 슬롯 아이템 판매 대상")
+                self.log(f"🔧 {why}  Lv.{from_level} → 슬롯 아이템 판매 대상")
+                if self._stats:
+                    self._stats.record_brick(self._instance_label, slot_no, from_level)
+                self._on_stat()
                 if locked:
                     run_steps(self.adb, self.ocr, self._fail_seq, timing, self._stop, log=self.log)
                 return _BRICKED, None
@@ -336,12 +348,18 @@ class Macro:
 
             self.log(f"⚠ 결과 텍스트 {tries}회 확인했으나 성공/실패 문구 인식 실패.")
             self.log(self.ocr.text_dump(img, region) or "  (인식된 텍스트 없음)")
+            self._record("unknown", slot_no, from_level)
             if self._save_shots != "none":
                 self._write_shot(img, path)
             if self._safety.get("stop_on_unknown_screen", True):
                 self.log(f"중단. 스크린샷: {path}")
                 return _ABORT, UNKNOWN
             run_steps(self.adb, self.ocr, self._fail_seq, timing, self._stop, log=self.log)
+
+    def _record(self, result: str, slot_no: int, from_level: int | None) -> None:
+        if self._stats:
+            self._stats.record_attempt(self._instance_label, slot_no, from_level, result)
+        self._on_stat()
 
     def _write_shot(self, img, path) -> None:
         import cv2
@@ -363,10 +381,17 @@ def main() -> int:
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--max", type=int, default=None, help="최대 시도 횟수 (config 값 override)")
     ap.add_argument("--dry-run", action="store_true", help="입력 없이 판정 흐름만 확인")
+    ap.add_argument("--no-stats", action="store_true", help="통계 DB 기록 안 함")
     args = ap.parse_args()
 
-    m = Macro(load_config(args.config), dry_run=args.dry_run)
-    return m.run(args.max)
+    from .stats import Stats
+    st = None if (args.no_stats or args.dry_run) else Stats()
+    m = Macro(load_config(args.config), dry_run=args.dry_run, stats=st)
+    try:
+        return m.run(args.max)
+    finally:
+        if st:
+            st.close()
 
 
 if __name__ == "__main__":
