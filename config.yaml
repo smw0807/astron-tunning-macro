@@ -11,6 +11,12 @@ adb:
 # 병렬로 돌릴 BlueStacks 인스턴스 이름 목록 (display_name). 비우면 adb.instance_name 하나.
 instances:
 - 개조
+# 좌표를 캘리브레이션한 기준 해상도. GUI '해상도 맞추기' 버튼 / enforce 로 강제 적용.
+display:
+  width: 960
+  height: 540
+  density: 160
+  enforce: false   # true 면 매크로 시작 시 각 인스턴스 해상도를 위 값으로 강제
 ocr:
   rec_model_path: models/korean_rec.onnx
   rec_keys_path: models/korean_dict.txt

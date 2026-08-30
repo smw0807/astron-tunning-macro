@@ -569,6 +569,9 @@ class App(tk.Tk):
         row = ttk.Frame(ins)
         row.pack(fill="x")
         ttk.Button(row, text="🔍 인스턴스 조회", command=self._scan_instances).pack(side="left")
+        d = self.cfg.get("display", {})
+        ttk.Button(row, text=f"📐 해상도 {d.get('width', 960)}×{d.get('height', 540)} 맞추기",
+                   command=self._enforce_resolution).pack(side="left", padx=6)
         self.v_scanmsg = tk.StringVar(value="조회를 누르면 BlueStacks 인스턴스 목록을 불러옵니다.")
         ttk.Label(row, textvariable=self.v_scanmsg, foreground="#777").pack(side="left", padx=8)
         ttk.Button(row, text="선택 적용", command=self._apply_checked_instances).pack(side="right")
@@ -626,10 +629,16 @@ class App(tk.Tk):
             self.inst_checks[name] = v
             mark = "●" if it["online"] else "○"
             color = "#3a3" if it["online"] else "#999"
+            tgt = f"{self.cfg.get('display', {}).get('width', 960)}x{self.cfg.get('display', {}).get('height', 540)}"
+            sz = it.get("size")
+            szlabel = f"  [{sz}]" if sz else ""
+            szcolor = "#3a3" if (sz == tgt or not sz) else "#c33"
             fr = ttk.Frame(self.inst_box)
             fr.grid(row=i // 3, column=i % 3, sticky="w", padx=6, pady=1)
             ttk.Checkbutton(fr, text=f"{name}", variable=v).pack(side="left")
             tk.Label(fr, text=f"{mark} {it['serial'] or '-'}", fg=color).pack(side="left")
+            if szlabel:
+                tk.Label(fr, text=szlabel, fg=szcolor).pack(side="left")
 
     def _apply_checked_instances(self):
         if self.inst_checks:
@@ -639,6 +648,36 @@ class App(tk.Tk):
                 return
             self.v_instances.set(", ".join(names))
         self._rebuild_runners()
+
+    def _enforce_resolution(self):
+        names = [n for n, v in self.inst_checks.items() if v.get()] if self.inst_checks \
+            else list(self.runners)
+        if not names:
+            messagebox.showinfo("안내", "먼저 인스턴스를 조회/체크하세요.", parent=self)
+            return
+        d = self.cfg.get("display", {})
+        w, h, dens = int(d.get("width", 960)), int(d.get("height", 540)), d.get("density", 160)
+        exe = self.v_adb.get().strip() or self.cfg["adb"]["path"]
+        self.v_scanmsg.set("해상도 적용 중...")
+        self.update_idletasks()
+
+        def work():
+            lines = []
+            for n in names:
+                serial = self._inst_serials.get(n, "")
+                try:
+                    cfg = {"adb": {"path": exe, "serial": serial, "instance_name": n,
+                                   "bluestacks_conf": self.cfg["adb"].get("bluestacks_conf")}}
+                    ad = Adb(cfg)
+                    ad.connect()
+                    before = ad.get_size()
+                    ad.set_size(w, h, dens)
+                    lines.append(f"{n}: {before} → {w}x{h}")
+                except Exception as e:
+                    lines.append(f"{n}: 실패 ({e})")
+            self.q.put(("resmsg", None, "\n".join(lines)))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _instance_names(self) -> list[str]:
         ins = self.cfg.get("instances")
@@ -1070,6 +1109,9 @@ class App(tk.Tk):
                     self.ocr_out.insert("end", payload)
                 elif kind == "insts":
                     self._populate_instances(payload)
+                elif kind == "resmsg":
+                    self.v_scanmsg.set("해상도 적용 완료")
+                    messagebox.showinfo("해상도 맞추기", payload, parent=self)
                 elif kind == "stat":
                     self._stat_dirty = True
                 elif kind == "done":

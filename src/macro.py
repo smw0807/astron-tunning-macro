@@ -106,11 +106,28 @@ class Macro:
             self.adb.key = lambda *a, **k: self.log(f"  key{a}")      # type: ignore
         self.adb.connect()
         self.log(f"연결됨: {self.adb.serial}")
+        self._check_display()
         if self._ocr_ext is not None:
             self.ocr = self._ocr_ext
         else:
             self.ocr = Ocr(self.cfg)
             self.log("OCR 초기화 완료")
+
+    def _check_display(self) -> None:
+        d = self.cfg.get("display") or {}
+        tw, th = int(d.get("width", 960)), int(d.get("height", 540))
+        dens = d.get("density")
+        try:
+            cur = self.adb.get_size()
+        except Exception:
+            return
+        if d.get("enforce") and cur != (tw, th) and not self.dry_run:
+            self.log(f"해상도 {cur} → {tw}x{th} 강제 적용")
+            self.adb.set_size(tw, th, dens)
+            self.adb.wait(1.5)
+        elif cur and cur != (tw, th):
+            self.log(f"⚠ 해상도 {cur[0]}x{cur[1]} ≠ 캘리브레이션 기준 {tw}x{th}. "
+                     f"좌표가 어긋납니다. (GUI '해상도 맞추기' 또는 display.enforce)")
 
     # ------------------------------------------------------------------
     def run(self, max_attempts: int | None = None) -> int:

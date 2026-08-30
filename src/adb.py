@@ -45,6 +45,17 @@ def list_instances(exe: str, conf_path: str, probe: bool = True) -> list[dict]:
         online = set(list_online_serials(exe))
         for it in out:
             it["online"] = bool(it["serial"]) and it["serial"] in online
+            it["size"] = None
+            if it["online"]:
+                try:
+                    r = subprocess.run([exe, "-s", it["serial"], "shell", "wm size"],
+                                       capture_output=True, timeout=8)
+                    txt = (r.stdout or b"").decode("utf-8", errors="replace")
+                    m = re.search(r"(?:Override|Physical) size:\s*(\d+)x(\d+)", txt)
+                    if m:
+                        it["size"] = f"{m.group(1)}x{m.group(2)}"
+                except Exception:
+                    pass
     return out
 
 
@@ -127,6 +138,26 @@ class Adb:
 
     def key(self, code: int) -> None:
         self.shell(f"input keyevent {int(code)}")
+
+    # ---- 해상도 -------------------------------------------------------
+    def get_size(self) -> tuple[int, int] | None:
+        out = self.shell("wm size")
+        m = re.search(r"Override size:\s*(\d+)x(\d+)", out) or re.search(r"Physical size:\s*(\d+)x(\d+)", out)
+        return (int(m.group(1)), int(m.group(2))) if m else None
+
+    def get_density(self) -> int | None:
+        out = self.shell("wm density")
+        m = re.search(r"Override density:\s*(\d+)", out) or re.search(r"Physical density:\s*(\d+)", out)
+        return int(m.group(1)) if m else None
+
+    def set_size(self, w: int, h: int, density: int | None = None) -> None:
+        self.shell(f"wm size {int(w)}x{int(h)}")
+        if density:
+            self.shell(f"wm density {int(density)}")
+
+    def reset_size(self) -> None:
+        self.shell("wm size reset")
+        self.shell("wm density reset")
 
     # ---- 화면 -----------------------------------------------------------
     def screencap(self) -> np.ndarray:
