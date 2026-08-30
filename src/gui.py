@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import queue
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -281,6 +282,8 @@ class App(tk.Tk):
         self.stop_event = threading.Event()
         self.q: queue.Queue = queue.Queue()
         self.stats = Stats()
+        self._ocr_lock = threading.Lock()
+        self._shared_ocr_engine: Ocr | None = None
 
         self._build()
         self._refresh_stats()
@@ -578,7 +581,9 @@ class App(tk.Tk):
 
         self.run_nb = ttk.Notebook(f)
         self.run_nb.pack(fill="both", expand=True, pady=4)
-        self.run_nb.bind("<<NotebookTabChanged>>", lambda e: None)
+        self._viewed_name = None
+        self.run_nb.bind("<<NotebookTabChanged>>",
+                         lambda e: setattr(self, "_viewed_name", self._current_run_name()))
         self.runners: dict[str, dict] = {}
         self._rebuild_runners()
 
@@ -675,6 +680,7 @@ class App(tk.Tk):
             lg.config(state="disabled")
             self.runners[name] = dict(status=sv, log=lg, start=b1, stop=b2,
                                       stop_event=threading.Event(), thread=None)
+        self._viewed_name = self._current_run_name()
 
     def start_instance(self, name: str):
         st = self.runners.get(name)
@@ -698,15 +704,18 @@ class App(tk.Tk):
 
         def work():
             try:
+                shared = None if dry else self._shared_ocr()
                 m = Macro(
                     cfg, dry_run=dry,
                     on_log=lambda s: self.q.put(("log", name, s)),
                     should_stop=st["stop_event"].is_set,
                     on_progress=lambda a, b, c: self.q.put(("prog", name, f"{c}  {a}/{b}")),
-                    on_shot=lambda img, tag: self.q.put(("img", name, img)),
+                    on_shot=lambda img, tag: (self.q.put(("img", name, img))
+                                              if name == self._viewed_name else None),
                     stats=None if dry else self.stats,
                     instance_label=name,
                     on_stat=lambda: self.q.put(("stat", None, None)),
+                    ocr=shared,
                 )
                 code = m.run(mx)
                 self.q.put(("log", name, f"종료 코드 {code}"))
@@ -946,9 +955,15 @@ class App(tk.Tk):
         var.set(f"{self.picked_xy[0]}, {self.picked_xy[1]}")
 
     # ---- OCR 테스트 ---------------------------------------------
+    def _shared_ocr(self) -> Ocr:
+        """모든 인스턴스가 공유하는 OCR 엔진 (CPU 과점유 방지)."""
+        with self._ocr_lock:
+            if self._shared_ocr_engine is None:
+                self._shared_ocr_engine = Ocr(self.cfg)
+            return self._shared_ocr_engine
+
     def _ensure_ocr(self):
-        if self.ocr is None:
-            self.ocr = Ocr(self.cfg)
+        self.ocr = self._shared_ocr()
         return self.ocr
 
     def _ocr_full(self):
@@ -1067,9 +1082,12 @@ class App(tk.Tk):
         except queue.Empty:
             pass
         if getattr(self, "_stat_dirty", False):
-            self._stat_dirty = False
-            self._refresh_stats()
-        self.after(100, self._pump)
+            now = time.monotonic()
+            if now - getattr(self, "_stat_last", 0.0) > 1.5:   # 통계 갱신 최대 1.5초마다
+                self._stat_dirty = False
+                self._stat_last = now
+                self._refresh_stats()
+        self.after(120, self._pump)
 
     def _log_line(self, s: str, who: str | None = None):
         w = None

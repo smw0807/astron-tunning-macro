@@ -78,9 +78,11 @@ class Macro:
         stats=None,
         instance_label: str | None = None,
         on_stat: Callable[[], None] | None = None,
+        ocr: Ocr | None = None,
     ):
         self.cfg = cfg
         self.dry_run = dry_run
+        self._ocr_ext = ocr
         self._log = on_log or (lambda m: print(m, flush=True))
         self._stop = should_stop or (lambda: False)
         self._progress = on_progress or (lambda a, b, c: None)
@@ -104,8 +106,11 @@ class Macro:
             self.adb.key = lambda *a, **k: self.log(f"  key{a}")      # type: ignore
         self.adb.connect()
         self.log(f"연결됨: {self.adb.serial}")
-        self.ocr = Ocr(self.cfg)
-        self.log("OCR 초기화 완료")
+        if self._ocr_ext is not None:
+            self.ocr = self._ocr_ext
+        else:
+            self.ocr = Ocr(self.cfg)
+            self.log("OCR 초기화 완료")
 
     # ------------------------------------------------------------------
     def run(self, max_attempts: int | None = None) -> int:
@@ -292,12 +297,11 @@ class Macro:
                     self.log("사용자 중단.")
                     return _ABORT, STOPPED
                 img = self.adb.screencap()
-                hit = self.ocr.find_any(img, rcfg["success_keywords"], region)
-                if hit:
-                    break
-                locked = self.ocr.find_any(img, self._locked_kw, region) if self._locked_kw else None
-                fail = self.ocr.find_any(img, rcfg["fail_keywords"], region)
-                if fail or locked:
+                lines = self.ocr.read(img, region)          # OCR 1회만
+                hit = Ocr.match(lines, rcfg["success_keywords"])
+                locked = Ocr.match(lines, self._locked_kw)
+                fail = Ocr.match(lines, rcfg["fail_keywords"])
+                if hit or fail or locked:
                     break
                 if _i < tries - 1:
                     self.adb.wait(poll)
@@ -347,7 +351,7 @@ class Macro:
                 continue
 
             self.log(f"⚠ 결과 텍스트 {tries}회 확인했으나 성공/실패 문구 인식 실패.")
-            self.log(self.ocr.text_dump(img, region) or "  (인식된 텍스트 없음)")
+            self.log("  읽힌 텍스트: " + (" / ".join(l.text for l in lines) or "(없음)"))
             self._record("unknown", slot_no, from_level)
             if self._save_shots != "none":
                 self._write_shot(img, path)

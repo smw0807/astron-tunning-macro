@@ -55,6 +55,7 @@ class Adb:
         self.exe = a["path"]
         self.package = a.get("package")
         self.serial = a.get("serial") or self._resolve_serial(a) or self._only_local_device()
+        self._raw_ok = bool(a.get("raw_screencap", True))
         if not self.serial:
             raise RuntimeError("adb serial 을 확인할 수 없습니다. config.yaml 의 adb.serial 을 직접 지정하세요.")
 
@@ -129,13 +130,30 @@ class Adb:
 
     # ---- 화면 -----------------------------------------------------------
     def screencap(self) -> np.ndarray:
-        """BGR ndarray 반환."""
+        """BGR ndarray 반환. 원시(raw) 캡처 우선 — PNG 인코딩/디코딩 CPU 절약."""
+        if self._raw_ok:
+            try:
+                return self._screencap_raw()
+            except Exception:
+                self._raw_ok = False  # 한 번 실패하면 PNG 로 고정
         raw = self._run(["exec-out", "screencap", "-p"], binary=True)
-        arr = np.frombuffer(raw, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        img = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             raise RuntimeError("스크린샷 디코드 실패 (기기 화면이 꺼져있거나 adb 오류)")
         return img
+
+    def _screencap_raw(self) -> np.ndarray:
+        buf = self._run(["exec-out", "screencap"], binary=True)
+        w = int.from_bytes(buf[0:4], "little")
+        h = int.from_bytes(buf[4:8], "little")
+        if not (0 < w <= 4096 and 0 < h <= 4096):
+            raise ValueError(f"raw 캡처 크기 이상 (w={w} h={h})")
+        body = w * h * 4
+        header = len(buf) - body            # 실제 헤더 길이 역산 (12 또는 16)
+        if header not in (12, 16):
+            raise ValueError(f"raw 캡처 형식 불일치 (len={len(buf)} body={body})")
+        px = np.frombuffer(buf[header:header + body], dtype=np.uint8).reshape(h, w, 4)
+        return cv2.cvtColor(px, cv2.COLOR_RGBA2BGR)
 
     def current_focus(self) -> str:
         return self.shell("dumpsys window | grep -E 'mCurrentFocus'")

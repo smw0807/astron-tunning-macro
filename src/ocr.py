@@ -1,6 +1,7 @@
 """RapidOCR(한국어) 래퍼 + 화면 텍스트 검색 헬퍼."""
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 import numpy as np
@@ -40,6 +41,8 @@ class Ocr:
             for k in ("intra_op_num_threads", "inter_op_num_threads"):
                 kwargs.pop(k, None)
             self.engine = RapidOCR(**kwargs)
+        # 여러 인스턴스가 한 엔진을 공유할 때 직렬화 (CPU 과점유 방지 + 스레드 안전)
+        self._lock = threading.Lock()
 
     def read(self, img: np.ndarray, region: list | None = None) -> list[Line]:
         ox, oy = 0, 0
@@ -48,7 +51,8 @@ class Ocr:
             x1, y1, x2, y2 = region
             ox, oy = x1, y1
             crop = img[y1:y2, x1:x2]
-        res, _ = self.engine(crop)
+        with self._lock:
+            res, _ = self.engine(crop)
         lines: list[Line] = []
         for box, text, conf in (res or []):
             cx = ox + sum(p[0] for p in box) / 4
@@ -56,21 +60,22 @@ class Ocr:
             lines.append(Line(text, float(conf), cx, cy, box))
         return lines
 
-    def find(self, img: np.ndarray, keyword: str, region: list | None = None) -> Line | None:
-        key = _norm(keyword)
-        for ln in self.read(img, region):
-            if key in _norm(ln.text):
-                return ln
-        return None
-
-    def find_any(self, img: np.ndarray, keywords: list[str], region: list | None = None):
-        lines = self.read(img, region)
-        for kw in keywords:
+    @staticmethod
+    def match(lines: list[Line], keywords: list[str]):
+        """이미 읽은 lines 에서 키워드 매칭 (OCR 재실행 없음)."""
+        for kw in keywords or ():
             key = _norm(kw)
             for ln in lines:
                 if key in _norm(ln.text):
                     return kw, ln
         return None
+
+    def find(self, img: np.ndarray, keyword: str, region: list | None = None) -> Line | None:
+        m = self.match(self.read(img, region), [keyword])
+        return m[1] if m else None
+
+    def find_any(self, img: np.ndarray, keywords: list[str], region: list | None = None):
+        return self.match(self.read(img, region), keywords)
 
     def text_dump(self, img: np.ndarray, region: list | None = None) -> str:
         return "\n".join(
