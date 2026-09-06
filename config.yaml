@@ -8,15 +8,14 @@ adb:
   instance_name: 개조
   bluestacks_conf: C:/ProgramData/BlueStacks_nxt/bluestacks.conf
   package: com.ctugames.astron
-# 병렬로 돌릴 BlueStacks 인스턴스 이름 목록 (display_name). 비우면 adb.instance_name 하나.
 instances:
+- 개조2
 - 개조
-# 좌표를 캘리브레이션한 기준 해상도. GUI '해상도 맞추기' 버튼 / enforce 로 강제 적용.
 display:
   width: 960
   height: 540
   density: 160
-  enforce: false   # true 면 매크로 시작 시 각 인스턴스 해상도를 위 값으로 강제
+  enforce: false
 ocr:
   rec_model_path: models/korean_rec.onnx
   rec_keys_path: models/korean_dict.txt
@@ -24,13 +23,13 @@ ocr:
   - 3
   - 32
   - 320
-  max_threads: 2       # OCR 이 CPU 다 물어서 PC 렉 걸리는 것 방지
+  max_threads: 2
 timing:
   after_tap: 0.6
-  after_modify: 1.2    # 개조 버튼 후 결과 폴링 시작 전 대기 (이후 poll_interval 로 재확인)
+  after_modify: 1.2
   after_confirm: 1.2
   loop_idle: 0.4
-  poll_interval: 0.5   # wait_text 가 화면 다시 캡처하는 간격
+  poll_interval: 0.5
 safety:
   max_attempts: 10000
   min_gold: 0
@@ -62,7 +61,7 @@ slots:
     - 520
 modify:
   fail_limit: 3
-  target_level: 7
+  target_level: 6
   start_level: 1
   level_region:
   - 0
@@ -155,7 +154,7 @@ result:
   - 2
   - 406
   - 102
-  result_tries: 6        # 결과 말풍선(타이핑 연출) 확인 횟수. poll_interval 간격으로 재캡처
+  result_tries: 6
   success_keywords:
   - 축하해요.
   - 축하
@@ -166,7 +165,6 @@ result:
   - 개조할 수 없
   - 더 이상 개조
   - 개조가 불가
-  # 개조 후 확인 팝업이 없음. NPC 말풍선만 바뀜 → 잠깐 대기만 (헛 캡처 제거)
   success_sequence:
   - wait: 0.5
   fail_sequence:
